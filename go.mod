@@ -1,4 +1,4 @@
-module github.com/reeceappling/pn532-ntg-rfid
+module github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws
 
 go 1.24.2
 
