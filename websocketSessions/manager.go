@@ -16,7 +16,7 @@ import (
 
 const (
 	MessageTypeSignup = iota
-	MessageTypeError
+	MessageTypeError  //1
 	MessageTypeWrite
 )
 
