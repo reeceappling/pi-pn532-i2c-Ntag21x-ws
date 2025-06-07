@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/goUtils/v2/utils"
 	"github.com/reeceappling/goUtils/v2/utils/slices"
@@ -188,7 +189,7 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 		return err
 	}
 
-	go func() {
+	go func() { // TODO: ensure this is all doing things correctly
 		defer func() {
 			s.expiryTimer.Stop()
 			delete(mgr.sessions, name)
@@ -214,7 +215,7 @@ func (mgr *SessionManager) Cleanup() {
 	close(mgr.done)
 }
 
-type Session struct {
+type Session struct { // TODO: reevaluate
 	Conn             *websocket.Conn
 	expires          time.Time
 	maxCheckFailures int
@@ -228,7 +229,7 @@ type Session struct {
 }
 
 // Does nothing if a session has not been added to a SessionManager or has been closed
-func (sess *Session) End() {
+func (sess *Session) End() { // TODO: reevaluate
 	// TODO: use mutex
 	if sess.managed {
 		go func() {
@@ -254,10 +255,97 @@ func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *tim
 	}
 }
 
-type msgResp struct {
+type ReceivedMsg struct {
 	msgType int
 	bytes   []byte
 	err     error
+}
+
+// TODO: process signup request
+
+func (res ReceivedMsg) validateSignupResponse(expName string) error {
+	resp, err := res.getBinaryResponseData(firstByteSignup)
+	if err != nil {
+		return err
+	}
+	if string(resp[1:]) != expName {
+		return errors.New("signup response data does not match requested")
+	}
+	return nil
+}
+
+const writeSize = 8 // TODO: is this correct??
+func (res ReceivedMsg) validateWriteRequest() (toWrite []byte, err error) {
+	resp, err := res.getBinaryResponseData(firstByteWrite)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (res ReceivedMsg) validateWriteResponse(expectedWritten [8]byte) error {
+	resp, err := res.getBinaryResponseData(firstByteWrite)
+	if err != nil {
+		return err
+	}
+	if string(expectedWritten[:]) != string(resp) {
+		return errors.New("bad response content, wrote wrong bytes")
+	}
+	return nil
+}
+
+func (res ReceivedMsg) validateReadRequest() error {
+	_, err := res.getBinaryResponseData(firstByteRead)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (res ReceivedMsg) processReadResponse() (bytesRead [writeSize]byte, err error) {
+	out := [writeSize]byte{}
+	resp, err := res.getBinaryResponseData(firstByteRead)
+	if len(resp) != writeSize {
+		return out, errors.New("bad read response size")
+	}
+	return [8]byte(resp), nil
+}
+
+func (res ReceivedMsg) getBinaryResponseData(expFirstByte byte) (resultWithTypeByte []byte, err error) {
+	resultWithTypeByte = nil
+	msgType, msgBytes := res.msgType, res.bytes
+	if res.err != nil {
+		err = errors.Join(errors.New("error reading response from websocket on client"), res.err)
+		return
+	}
+	// validate response is as expected
+	resp := &SocketMessage{}
+	if err = json.Unmarshal(msgBytes, resp); err != nil {
+		return
+	}
+	if msgType == websocket.TextMessage {
+		err = errors.New(string(resp.Data))
+		return
+	}
+	if msgType != websocket.BinaryMessage {
+		err = errors.New("unexpected message format for signup response")
+		return
+	}
+	if resp.Data[0] != expFirstByte {
+		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
+		return
+	}
+	if len(resp.Data) == 1 {
+		return nil, nil // TODO: ok?
+	}
+	return resp.Data[1:], nil
+}
+
+func ensureSizePlusOneByteResponse(resp []byte) error {
+	if writeSize+1 != len(resp) {
+		return errors.New("invalid response size even though the response was non-erroneous")
+	}
+	return nil
 }
 
 func (s *Session) processSuccessfulRenewal() {
@@ -279,18 +367,18 @@ func (s *Session) tryRenew() (renewErr error) {
 	s.expiryTimer.Stop()
 	defer s.mutex.Unlock()
 
-	err := s.Conn.WriteMessage(websocket.PingMessage, []byte{})
+	err := s.Conn.WriteMessage(websocket.PingMessage, []byte{}) // TODO: pongHandler?
 	if err != nil {
 		s.processRenewalFailure()
 		return err
 	}
 	// READ for a ping message (within the allowed timeframe)
-	msgType, _, err := s.TryGetMessage()
-	if err != nil {
+	msg := s.TryGetMessage()
+	if msg.err != nil {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("ping failed, erroneous response"), err)
+		return errors.Join(errors.New("ping failed, erroneous response"), msg.err)
 	}
-	if msgType != websocket.PingMessage {
+	if msg.msgType != websocket.PongMessage {
 		s.processRenewalFailure()
 		return errors.New("bad ping response")
 	}
@@ -302,17 +390,22 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 	s.expires = t
 }
 
-func (sess *Session) TryGetMessage() (int, []byte, error) {
-	resultChan := make(chan msgResp, 1)
+func (sess *Session) TryGetMessage() ReceivedMsg {
+	resultChan := make(chan ReceivedMsg, 1)
 	go func() {
+		defer close(resultChan)
 		msgType, bytes, err := sess.Conn.ReadMessage()
-		resultChan <- msgResp{msgType, bytes, err}
+		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
 	select {
 	case res := <-resultChan:
-		return res.msgType, res.bytes, res.err
+		return res
 	case <-time.After(sess.requestTimeout):
-		return 0, nil, errors.New("timeout") // TODO: move timeout error
+		return ReceivedMsg{
+			msgType: MessageTypeError,
+			bytes:   nil,
+			err:     errors.New("timeout"), // TODO: move timeout error
+		}
 	}
 }
 
@@ -329,84 +422,86 @@ func (sess *Session) TryReadRFID() ([8]byte, error) {
 	sess.mutex.Lock()
 	defer sess.mutex.Unlock()
 	out := [8]byte{}
-	err := sess.Conn.WriteMessage(websocket.TextMessage, []byte(ReadEndpt))
+	err := NewReadRequest().WriteTo(sess.Conn)
 	if err != nil {
 		return out, err
 	}
-	msgType, msgBytes, err := sess.TryGetMessage()
-	if err != nil {
-		return out, err
-	}
-	if msgType != websocket.TextMessage {
-		return out, errors.New("unexpected message type for read response: " + string(msgBytes))
-	}
-	return [8]byte(msgBytes), nil
+	return sess.TryGetMessage().processReadResponse()
 }
 
-func (sess *Session) TryWriteRFID(toWrite [8]byte) error {
+func (sess *Session) TryWriteRFID(toWrite [8]byte) error { // TODO: this is client side
 	sess.mutex.Lock()
 	defer sess.mutex.Unlock()
-	err := NewMsg().
-		WithType(MessageTypeWrite).
-		WithData(toWrite[:]).
-		WriteTo(sess.Conn)
+	err := NewWriteRequest(toWrite).WriteTo(sess.Conn)
 	if err != nil {
 		return err
 	}
-	msgType, msgBytes, err := sess.TryGetMessage()
-	if err != nil {
-		return err
-	}
-	if msgType != websocket.TextMessage {
-		return errors.New("unexpected message type for read response")
-	}
-	if string(msgBytes) != string(toWrite[:]) {
-		return errors.New("unexpected message was written and returned")
-	}
-	return nil
+	return sess.TryGetMessage().validateWriteResponse(toWrite)
 }
 
 func ClientSignup(conn *websocket.Conn, name, secret string) error { // TODO: DO THIS!!!
 	// send signup message
-	bytes, _ := json.Marshal(SignupRequest{
-		Name:   RfidReaderName(name),
-		Secret: secret,
-	})
-	err := NewMsg().
-		WithType(MessageTypeSignup).
-		WithData(bytes).
-		WriteTo(conn)
+	err := NewSignupRequest(name, secret).WriteTo(conn)
 	if err != nil {
 		return err
 	}
 	// try to recieve response message (or time-out)
-	resultChan := make(chan msgResp, 1)
+	resultChan := make(chan ReceivedMsg, 1)
 	go func() {
-		msgType, bytes, err := conn.ReadMessage()
-		resultChan <- msgResp{msgType, bytes, err}
+		msgType, bs, readErr := conn.ReadMessage()
+		resultChan <- ReceivedMsg{msgType, bs, readErr}
 	}()
 	select {
 	case res := <-resultChan:
-		msgType, msgBytes := res.msgType, res.bytes
-		if res.err != nil {
-			return errors.Join(errors.New("error reading signup response from websocket on client"), res.err)
+		errResp := res.validateSignupResponse(name)
+		if errResp != nil {
+			return errResp
 		}
-		// validate response is as expected
-		if msgType != websocket.BinaryMessage {
-			return errors.New("unexpected message format for signup response")
-		}
-		resp := &SocketMessage{}
-		if err = json.Unmarshal(msgBytes, resp); err != nil {
-			return err
-		}
-		if resp.Type != MessageTypeSignup {
-			return errors.New("unexpected message type for signup response")
-		}
-		if string(resp.Data) != name {
-			return errors.New("signup response data does not match requested")
-		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(3 * time.Second): // TODO: set request timeout
 		return errors.New("timeout") // TODO: move timeout error
 	}
 	return nil
+}
+
+/// TODO: TRYING OUT STUFF DOWN HERE!!!!
+
+const (
+	firstByteSignup uint8 = iota
+	firstByteRead
+	firstByteWrite
+)
+
+func NewErrorResponse(err error) *SocketMessage {
+	return &SocketMessage{
+		Type: websocket.TextMessage,
+		Data: []byte(err.Error()),
+	}
+}
+func NewReadRequest() *SocketMessage {
+	return &SocketMessage{
+		Type: websocket.BinaryMessage,
+		Data: []byte{firstByteRead},
+	}
+}
+func NewWriteRequest(w [8]byte) *SocketMessage {
+	return &SocketMessage{
+		Type: websocket.BinaryMessage,
+		Data: append([]byte{firstByteWrite}, w[:]...),
+	}
+}
+func NewSignupRequest(readerName, secret string) *SocketMessage {
+	bs, _ := json.Marshal(SignupRequest{
+		Name:   RfidReaderName(readerName),
+		Secret: secret,
+	})
+	return &SocketMessage{
+		Type: websocket.BinaryMessage,
+		Data: append([]byte{firstByteSignup}, bs...),
+	}
+}
+func NewSignupResponse(signupRequestBytes []byte) *SocketMessage { // TODO: do we even need this?
+	return &SocketMessage{
+		Type: websocket.BinaryMessage,
+		Data: signupRequestBytes,
+	}
 }
