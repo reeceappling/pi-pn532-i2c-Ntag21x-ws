@@ -9,6 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/freefare"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions"
+	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/client"
+	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
 	"log"
 	"net/url"
 	"os"
@@ -35,11 +37,15 @@ func main() {
 		panic("failed to read nameFile!")
 	}
 	clientName := string(bs)
+	ctx := context.Background()
 
-	err = websocketSessions.NewClient(context.Background(), clientName, serverHostname, "/ws", 443, secret, nil)
+	err, closeClient := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
+	if err != nil {
+	}
+	defer closeClient()
 
 	// TODO: do we want to setup websocket repeatedly?
-	websocketServerUrl := url.URL{Scheme: "ws", Host: mainHost, Path: "/ws"} // TODO: ENSURE websocket encrypted?????? PORT???
+	websocketServerUrl := url.URL{Scheme: "ws", Host: serverHostname, Path: "/ws"} // TODO: ENSURE websocket encrypted?????? PORT???
 	c, resp, errDial := websocket.DefaultDialer.Dial(websocketServerUrl.String(), nil)
 	if errDial != nil {
 		if resp == nil {
@@ -61,30 +67,32 @@ func main() {
 		}
 	}()
 
-	err = websocketSessions.ClientSignup(c, clientName, secret)
-	if err != nil {
-		panic("failed client signup: " + err.Error())
-	}
+	//err = client.ClientSignup(c, clientName, secret) // TODO: ?????
+	//if err != nil {
+	//	panic("failed client signup: " + err.Error())
+	//}
 
 	// TODO: ensure we won't get colliding messages
 	// Start listening for real messages
 	for {
-		m := websocketSessions.TryGetMessage(c, 10*time.Second) // TODO: time ok?
+		ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second) // TODO: time ok?
+		m := shared.TryGetMessage(ctxTimeout, c)
+		cancel()
 		if m.Err != nil {
-			if errors.Is(err, websocketSessions.ErrGetMessageTimeout) { // Don't crash on non-found message
+			if errors.Is(err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
 				continue
 			}
 			fmt.Println("Error reading from websocket on client:", m.Err)
 			panic("NO RESPONSE") // TODO: WHAT HERE????
 		}
-		var outgoing *websocketSessions.SocketMessage
+		var outgoing *shared.SocketMessage
 		switch m.MsgType {
 		case websocket.PingMessage: // For keeping session alive
 			err = m.ValidateRenewalRequest(clientName)
 			if err != nil {
 				panic("NO RESPONSE") // TODO: WHAT HERE????
 			}
-			outgoing = websocketSessions.NewRenewalResponse(secret)
+			outgoing = shared.NewRenewalResponse(secret)
 			err = outgoing.WriteTo(c) // TODO: move
 			if err != nil {
 				fmt.Println("Error writing ping to websocket from client:", err) // TODO: handle?
@@ -98,7 +106,7 @@ func main() {
 				panic("EMPTY BINARY MESSAGE")
 			}
 			switch m.Bytes[0] {
-			case websocketSessions.FirstByteRead:
+			case shared.FirstByteRead:
 				if err = m.ValidateReadRequest(); err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
 				}
@@ -106,13 +114,13 @@ func main() {
 				if err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
 				}
-				outgoing = websocketSessions.NewReadResponse(rres)
+				outgoing = shared.NewReadResponse(rres)
 				err = outgoing.WriteTo(c) // TODO MOVE
 				if err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
 				}
 
-			case websocketSessions.FirstByteWrite:
+			case shared.FirstByteWrite:
 				toWrite, err := m.ValidateWriteRequest()
 				if err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
@@ -121,7 +129,7 @@ func main() {
 				if err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
 				}
-				outgoing = websocketSessions.NewWriteRequest(toWrite)
+				outgoing = shared.NewWriteRequest(toWrite)
 				err = outgoing.WriteTo(c) // TODO: MOVE
 				if err != nil {
 					panic("INVALID READ REQUEST") // TODO: CHANGE
@@ -131,10 +139,10 @@ func main() {
 				// TODO: ERROR!!!!!
 			}
 
-			var outgoing *websocketSessions.SocketMessage
-			incoming := websocketSessions.SocketMessage{},
+			var outgoing *shared.SocketMessage
+			incoming := shared.SocketMessage{}
 			if err = json.Unmarshal(msgBytes, &incoming); err != nil {
-				err = outgoing.WithType(websocketSessions.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
+				err = outgoing.WithType(shared.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
 				if err != nil {
 					fmt.Println("Error writing error to websocket for binary msg:", err.Error()) // TODO: handle?
 				}
@@ -142,16 +150,16 @@ func main() {
 				continue
 			}
 			switch incoming.Type {
-			case websocketSessions.MessageTypeWrite: // TODO: ONLY ACCEPTS BASE 2!!!!!
+			case shared.MessageTypeWrite: // TODO: ONLY ACCEPTS BASE 2!!!!!
 				toWrite := string(incoming.Data)
 				if len(incoming.Data) != 8 {
-					outgoing.WithType(websocketSessions.MessageTypeError).WithData([]byte("invalid incoming data size")) // TODO: size?
+					outgoing.WithType(shared.MessageTypeError).WithData([]byte("invalid incoming data size")) // TODO: size?
 				} else {
 					// Try to write the data
 					if err = writeUserData([8]byte(incoming.Data)); err != nil {
-						outgoing.WithType(websocketSessions.MessageTypeError).WithData([]byte("failed to write user data: " + err.Error()))
+						outgoing.WithType(shared.MessageTypeError).WithData([]byte("failed to write user data: " + err.Error()))
 					} else {
-						outgoing.WithType(websocketSessions.MessageTypeWrite).WithData([]byte(toWrite))
+						outgoing.WithType(shared.MessageTypeWrite).WithData([]byte(toWrite))
 					}
 				}
 
