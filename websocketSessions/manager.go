@@ -42,7 +42,7 @@ func NewMsg() *SocketMessage {
 }
 
 type SocketMessage struct {
-	Type int    `json:"type"` // TODO: msg type as int?
+	Type int    `json:"type"` // Always binary, ping, pong, or string(error)
 	Data []byte `json:"data,omitempty"`
 }
 
@@ -57,13 +57,20 @@ func (sockMsg *SocketMessage) WithType(msgType int) *SocketMessage {
 func (sockMsg *SocketMessage) WriteTo(c *websocket.Conn) error {
 	respBytes, err := json.Marshal(*sockMsg) // Error should be impossible here
 	if err != nil {
-		return errors.Join(errors.New("failed to marshal socket message to bytes"), err)
+		return errors.Join(errors.New("failed to marshal socket message to Bytes"), err)
 	}
 	err = c.WriteMessage(websocket.BinaryMessage, respBytes)
 	if err != nil {
 		return errors.Join(errors.New("failed to write socket message to connection"), err)
 	}
 	return nil
+}
+
+type SessionManager struct {
+	sessions map[RfidReaderName]*Session
+	secret   string
+	cleanup  *time.Ticker
+	done     chan struct{}
 }
 
 var defaultCleanupFrequency = 5 * time.Minute
@@ -78,7 +85,7 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 
 	go func() {
 		defer func() {
-			defer mgr.cleanup.Stop()
+			defer mgr.cleanup.Stop() // TODO: reevaluate?
 			for _, session := range mgr.sessions {
 				session.End()
 			}
@@ -100,13 +107,6 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 		}
 	}()
 	return mgr
-}
-
-type SessionManager struct {
-	sessions map[RfidReaderName]*Session
-	secret   string
-	cleanup  *time.Ticker
-	done     chan struct{}
 }
 
 func (mgr *SessionManager) SecretValid(secret string) bool {
@@ -133,7 +133,7 @@ func (mgr *SessionManager) Middleware() func(http.Handler) http.Handler {
 
 const sessionManagerContextKey = "rfidSessionManager"
 
-func GetSessionManager(ctx context.Context) *SessionManager { // TODO: private?
+func GetSessionManager(ctx context.Context) *SessionManager {
 	mgr, ok := ctx.Value(sessionManagerContextKey).(*SessionManager)
 	if !ok {
 		return nil
@@ -141,18 +141,18 @@ func GetSessionManager(ctx context.Context) *SessionManager { // TODO: private?
 	return mgr
 }
 
-func (mgr *SessionManager) ReadRfid(readerName RfidReaderName) ([8]byte, error) {
+func (mgr *SessionManager) ReadRfid(readerName RfidReaderName) ([RfidByteSize]byte, error) {
 	if mgr == nil {
-		return [8]byte{}, ErrNoSessionManager
+		return [RfidByteSize]byte{}, ErrNoSessionManager
 	}
 	sess, exists := mgr.sessions[readerName]
 	if !exists {
-		return [8]byte{}, utils.NotFound
+		return [RfidByteSize]byte{}, utils.NotFound
 	}
 	return sess.TryReadRFID()
 }
 
-func (mgr *SessionManager) WriteRfid(readerName RfidReaderName, toWrite [8]byte) error {
+func (mgr *SessionManager) WriteRfid(readerName RfidReaderName, toWrite [RfidByteSize]byte) error {
 	if mgr == nil {
 		return ErrNoSessionManager
 	}
@@ -170,18 +170,17 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 	if !mgr.SecretValid(req.Secret) {
 		return ErrSecretMismatch
 	}
-	name := req.Name
-	if existingSession, exists := mgr.sessions[name]; exists { // TODO: rwMutex for this???????
-		err = existingSession.tryRenew()
-		// TODO: check old session and close if it is not working
+	if existingSession, exists := mgr.sessions[req.Name]; exists { // TODO: rwMutex for this???????
+		err = existingSession.tryRenew(string(req.Name), mgr.secret)
+		// TODO: check old session and close if it is not working?
 		return errors.New("session already exists") // TODO: MOVE?
 	}
 	s.managed = true // So we don't close early
-	mgr.sessions[name] = s
+	mgr.sessions[req.Name] = s
 
-	err = NewMsg().WithType(MessageTypeSignup).WithData([]byte(req.Name)).WriteTo(s.Conn)
+	err = NewSignupResponse(req.Name).WriteTo(s.Conn)
 	if err != nil {
-		delete(mgr.sessions, name)
+		delete(mgr.sessions, req.Name)
 		s.expiryTimer.Stop()
 		s.managed = false
 		close(s.closer)
@@ -192,7 +191,7 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 	go func() { // TODO: ensure this is all doing things correctly
 		defer func() {
 			s.expiryTimer.Stop()
-			delete(mgr.sessions, name)
+			delete(mgr.sessions, req.Name)
 			s.managed = false
 			close(s.closer)
 			sessionCancelFunc()
@@ -202,7 +201,7 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 			select {
 			case <-s.expiryTimer.C:
 				// TODO: retries?
-				err = s.tryRenew() // This will close it if renew fails enough
+				err = s.tryRenew(string(req.Name), mgr.secret) // This will close it if renew fails enough
 			case <-s.closer:
 				return
 			}
@@ -228,16 +227,6 @@ type Session struct { // TODO: reevaluate
 	failedChecks     int
 }
 
-// Does nothing if a session has not been added to a SessionManager or has been closed
-func (sess *Session) End() { // TODO: reevaluate
-	// TODO: use mutex
-	if sess.managed {
-		go func() {
-			sess.closer <- true
-		}()
-	}
-}
-
 func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
 	sessionTimeout := utils.Default(sessionTTL, 5*time.Minute)
 	timeout := utils.Default(reqTimeout, 30*time.Second)
@@ -255,16 +244,27 @@ func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *tim
 	}
 }
 
-type ReceivedMsg struct {
-	msgType int
-	bytes   []byte
-	err     error
+// Does nothing if a session has not been added to a SessionManager or has been closed
+func (sess *Session) End() { // TODO: reevaluate
+	// TODO: use mutex
+	if sess.managed {
+		go func() {
+			sess.closer <- true
+		}()
+	}
 }
 
-// TODO: process signup request
+type ReceivedMsg struct {
+	MsgType int
+	Bytes   []byte
+	Err     error
+}
 
-func (res ReceivedMsg) validateSignupResponse(expName string) error {
-	resp, err := res.getBinaryResponseData(firstByteSignup)
+func (res ReceivedMsg) ValidateSignupResponse(expName string) error {
+	if res.Err != nil {
+		return res.Err
+	}
+	resp, err := res.getResponseData(websocket.BinaryMessage, firstByteSignup)
 	if err != nil {
 		return err
 	}
@@ -274,48 +274,54 @@ func (res ReceivedMsg) validateSignupResponse(expName string) error {
 	return nil
 }
 
-const writeSize = 8 // TODO: is this correct??
-func (res ReceivedMsg) validateWriteRequest() (toWrite []byte, err error) {
-	resp, err := res.getBinaryResponseData(firstByteWrite)
-	if err != nil {
-		return nil, err
+const RfidByteSize = 8 // TODO: is this correct?? must match RfidByteSize in mdb.go
+func (res ReceivedMsg) ValidateWriteRequest() (toWrite [RfidByteSize]byte, err error) {
+	if res.Err != nil {
+		return [RfidByteSize]byte{}, res.Err
 	}
-	return resp, nil
+	resp, err := res.getResponseData(websocket.BinaryMessage, FirstByteWrite)
+	if err != nil {
+		return [RfidByteSize]byte{}, err
+	}
+	if len(resp) != RfidByteSize {
+		return [RfidByteSize]byte{}, errors.New("invalid write request size")
+	}
+	return [RfidByteSize]byte(resp), nil
 }
 
-func (res ReceivedMsg) validateWriteResponse(expectedWritten [8]byte) error {
-	resp, err := res.getBinaryResponseData(firstByteWrite)
+func (res ReceivedMsg) validateWriteResponse(expectedWritten [RfidByteSize]byte) error {
+	resp, err := res.getResponseData(websocket.BinaryMessage, FirstByteWrite)
 	if err != nil {
 		return err
 	}
 	if string(expectedWritten[:]) != string(resp) {
-		return errors.New("bad response content, wrote wrong bytes")
+		return errors.New("bad response content, wrote wrong Bytes")
 	}
 	return nil
 }
 
-func (res ReceivedMsg) validateReadRequest() error {
-	_, err := res.getBinaryResponseData(firstByteRead)
+func (res *ReceivedMsg) ValidateReadRequest() error {
+	_, err := res.getResponseData(websocket.BinaryMessage, FirstByteRead)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (res ReceivedMsg) processReadResponse() (bytesRead [writeSize]byte, err error) {
-	out := [writeSize]byte{}
-	resp, err := res.getBinaryResponseData(firstByteRead)
-	if len(resp) != writeSize {
+func (res ReceivedMsg) processReadResponse() (bytesRead [RfidByteSize]byte, err error) {
+	out := [RfidByteSize]byte{}
+	resp, err := res.getResponseData(websocket.BinaryMessage, FirstByteRead)
+	if len(resp) != RfidByteSize {
 		return out, errors.New("bad read response size")
 	}
-	return [8]byte(resp), nil
+	return [RfidByteSize]byte(resp), nil
 }
 
-func (res ReceivedMsg) getBinaryResponseData(expFirstByte byte) (resultWithTypeByte []byte, err error) {
+func (res ReceivedMsg) getResponseData(expMsgType int, expFirstByte byte) (resultWithTypeByte []byte, err error) {
 	resultWithTypeByte = nil
-	msgType, msgBytes := res.msgType, res.bytes
-	if res.err != nil {
-		err = errors.Join(errors.New("error reading response from websocket on client"), res.err)
+	msgType, msgBytes := res.MsgType, res.Bytes
+	if res.Err != nil {
+		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
 		return
 	}
 	// validate response is as expected
@@ -327,8 +333,8 @@ func (res ReceivedMsg) getBinaryResponseData(expFirstByte byte) (resultWithTypeB
 		err = errors.New(string(resp.Data))
 		return
 	}
-	if msgType != websocket.BinaryMessage {
-		err = errors.New("unexpected message format for signup response")
+	if msgType != expMsgType {
+		err = errors.New("unexpected message format for response")
 		return
 	}
 	if resp.Data[0] != expFirstByte {
@@ -339,13 +345,6 @@ func (res ReceivedMsg) getBinaryResponseData(expFirstByte byte) (resultWithTypeB
 		return nil, nil // TODO: ok?
 	}
 	return resp.Data[1:], nil
-}
-
-func ensureSizePlusOneByteResponse(resp []byte) error {
-	if writeSize+1 != len(resp) {
-		return errors.New("invalid response size even though the response was non-erroneous")
-	}
-	return nil
 }
 
 func (s *Session) processSuccessfulRenewal() {
@@ -362,25 +361,21 @@ func (s *Session) processRenewalFailure() {
 	s.expiryTimer.Reset(s.ttl)
 }
 
-func (s *Session) tryRenew() (renewErr error) {
+func (s *Session) tryRenew(name, expSecret string) (renewErr error) {
 	s.mutex.Lock()
 	s.expiryTimer.Stop()
 	defer s.mutex.Unlock()
 
-	err := s.Conn.WriteMessage(websocket.PingMessage, []byte{}) // TODO: pongHandler?
+	err := NewRenewalRequest(name).WriteTo(s.Conn) // TODO: pong handler?
 	if err != nil {
 		s.processRenewalFailure()
 		return err
 	}
 	// READ for a ping message (within the allowed timeframe)
-	msg := s.TryGetMessage()
-	if msg.err != nil {
+	err = s.TryGetMessage().validateRenewalResponse(expSecret)
+	if err != nil {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("ping failed, erroneous response"), msg.err)
-	}
-	if msg.msgType != websocket.PongMessage {
-		s.processRenewalFailure()
-		return errors.New("bad ping response")
+		return errors.Join(errors.New("failed to renew client lease"), err)
 	}
 	s.processSuccessfulRenewal()
 	return nil
@@ -391,23 +386,31 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 }
 
 func (sess *Session) TryGetMessage() ReceivedMsg {
+	timedCtx, cancel := context.WithTimeout(context.Background(), sess.requestTimeout)
+	defer cancel()
+	return TryGetMessage(timedCtx, sess.Conn)
+}
+
+func TryGetMessage(ctx context.Context, conn *websocket.Conn) ReceivedMsg {
 	resultChan := make(chan ReceivedMsg, 1)
 	go func() {
 		defer close(resultChan)
-		msgType, bytes, err := sess.Conn.ReadMessage()
+		msgType, bytes, err := conn.ReadMessage()
 		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
 	select {
 	case res := <-resultChan:
 		return res
-	case <-time.After(sess.requestTimeout):
+	case <-ctx.Done():
 		return ReceivedMsg{
-			msgType: MessageTypeError,
-			bytes:   nil,
-			err:     errors.New("timeout"), // TODO: move timeout error
+			MsgType: MessageTypeError,
+			Bytes:   nil,
+			Err:     ErrGetMessageTimeout,
 		}
 	}
 }
+
+var ErrGetMessageTimeout = errors.New("timeout")
 
 func (mgr *SessionManager) Sessions() []string {
 	if mgr == nil {
@@ -418,10 +421,10 @@ func (mgr *SessionManager) Sessions() []string {
 	})
 }
 
-func (sess *Session) TryReadRFID() ([8]byte, error) {
+func (sess *Session) TryReadRFID() ([RfidByteSize]byte, error) {
 	sess.mutex.Lock()
 	defer sess.mutex.Unlock()
-	out := [8]byte{}
+	out := [RfidByteSize]byte{}
 	err := NewReadRequest().WriteTo(sess.Conn)
 	if err != nil {
 		return out, err
@@ -429,7 +432,7 @@ func (sess *Session) TryReadRFID() ([8]byte, error) {
 	return sess.TryGetMessage().processReadResponse()
 }
 
-func (sess *Session) TryWriteRFID(toWrite [8]byte) error { // TODO: this is client side
+func (sess *Session) TryWriteRFID(toWrite [RfidByteSize]byte) error { // TODO: this is client side
 	sess.mutex.Lock()
 	defer sess.mutex.Unlock()
 	err := NewWriteRequest(toWrite).WriteTo(sess.Conn)
@@ -439,36 +442,24 @@ func (sess *Session) TryWriteRFID(toWrite [8]byte) error { // TODO: this is clie
 	return sess.TryGetMessage().validateWriteResponse(toWrite)
 }
 
-func ClientSignup(conn *websocket.Conn, name, secret string) error { // TODO: DO THIS!!!
+func ClientSignup(conn *websocket.Conn, name, secret string) error {
 	// send signup message
 	err := NewSignupRequest(name, secret).WriteTo(conn)
 	if err != nil {
 		return err
 	}
-	// try to recieve response message (or time-out)
-	resultChan := make(chan ReceivedMsg, 1)
-	go func() {
-		msgType, bs, readErr := conn.ReadMessage()
-		resultChan <- ReceivedMsg{msgType, bs, readErr}
-	}()
-	select {
-	case res := <-resultChan:
-		errResp := res.validateSignupResponse(name)
-		if errResp != nil {
-			return errResp
-		}
-	case <-time.After(3 * time.Second): // TODO: set request timeout
-		return errors.New("timeout") // TODO: move timeout error
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // TODO: ensure timeout ok
+	defer cancel()
+	return TryGetMessage(ctx, conn).ValidateSignupResponse(name)
 }
 
 /// TODO: TRYING OUT STUFF DOWN HERE!!!!
 
 const (
 	firstByteSignup uint8 = iota
-	firstByteRead
-	firstByteWrite
+	FirstByteRead
+	FirstByteWrite
+	firstByteRenew
 )
 
 func NewErrorResponse(err error) *SocketMessage {
@@ -480,13 +471,19 @@ func NewErrorResponse(err error) *SocketMessage {
 func NewReadRequest() *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.BinaryMessage,
-		Data: []byte{firstByteRead},
+		Data: []byte{FirstByteRead},
 	}
 }
-func NewWriteRequest(w [8]byte) *SocketMessage {
+func NewReadResponse(r [RfidByteSize]byte) *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.BinaryMessage,
-		Data: append([]byte{firstByteWrite}, w[:]...),
+		Data: append([]byte{FirstByteRead}, r[:]...),
+	}
+}
+func NewWriteRequest(w [RfidByteSize]byte) *SocketMessage { // TODO: req/res are the same for this one
+	return &SocketMessage{
+		Type: websocket.BinaryMessage,
+		Data: append([]byte{FirstByteWrite}, w[:]...),
 	}
 }
 func NewSignupRequest(readerName, secret string) *SocketMessage {
@@ -499,9 +496,39 @@ func NewSignupRequest(readerName, secret string) *SocketMessage {
 		Data: append([]byte{firstByteSignup}, bs...),
 	}
 }
-func NewSignupResponse(signupRequestBytes []byte) *SocketMessage { // TODO: do we even need this?
+func NewSignupResponse(clientName RfidReaderName) *SocketMessage { // TODO: do we even need this?
 	return &SocketMessage{
 		Type: websocket.BinaryMessage,
-		Data: signupRequestBytes,
+		Data: append([]byte{firstByteSignup}, []byte(clientName)...),
 	}
+}
+func NewRenewalRequest(readerName string) *SocketMessage {
+	return &SocketMessage{
+		Type: websocket.PingMessage, // TODO: is this ok?
+		Data: append([]byte{firstByteRenew}, []byte(readerName)...),
+	}
+}
+func NewRenewalResponse(secret string) *SocketMessage { // TODO: USE THIS
+	return &SocketMessage{
+		Type: websocket.PongMessage,
+		Data: append([]byte{firstByteRenew}, []byte(secret)...),
+	}
+}
+func (res ReceivedMsg) ValidateRenewalRequest(expName string) error {
+	return res.genericValidate(websocket.PingMessage, firstByteRenew, expName, "renewal request")
+}
+
+func (res ReceivedMsg) validateRenewalResponse(expSecret string) error {
+	return res.genericValidate(websocket.PongMessage, firstByteRenew, expSecret, "renewal response")
+}
+
+func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr string, what string) error {
+	resp, err := res.getResponseData(expMsgType, expFirstByte)
+	if err != nil {
+		return err
+	}
+	if string(resp) != exStr {
+		return fmt.Errorf(`received incorrect secret on %s`, what)
+	}
+	return nil
 }

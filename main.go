@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,18 +12,18 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"time"
 )
 
 func main() {
-	apiServiceName := os.Getenv("MAIN_API_SERVICENAME")
-	if apiServiceName == "" {
-		panic("MAIN_API_SERVICENAME env var nonexistent")
+	serverHostname := os.Getenv("SERVER_HOSTNAME")
+	if serverHostname == "" {
+		panic("SERVER_HOSTNAME env var nonexistent")
 	}
 	namespace := os.Getenv("THIS_NAMESPACE")
 	if namespace == "" {
 		panic("THIS_NAMESPACE env var nonexistent")
 	}
-	mainHost := fmt.Sprintf(`%s.%s:%d`, apiServiceName, namespace, 443) // TODO: ensure 443 ok!
 	// TODO: setup reader/writer
 	// Get clientName and signupSecret
 	secret := os.Getenv("RFID_SECRET")
@@ -34,6 +35,8 @@ func main() {
 		panic("failed to read nameFile!")
 	}
 	clientName := string(bs)
+
+	err = websocketSessions.NewClient(context.Background(), clientName, serverHostname, "/ws", 443, secret, nil)
 
 	// TODO: do we want to setup websocket repeatedly?
 	websocketServerUrl := url.URL{Scheme: "ws", Host: mainHost, Path: "/ws"} // TODO: ENSURE websocket encrypted?????? PORT???
@@ -66,14 +69,24 @@ func main() {
 	// TODO: ensure we won't get colliding messages
 	// Start listening for real messages
 	for {
-		msgType, msgBytes, errRd := c.ReadMessage()
-		if errRd != nil {
-			fmt.Println("Error reading from websocket on client:", errRd)
-			continue
+		m := websocketSessions.TryGetMessage(c, 10*time.Second) // TODO: time ok?
+		if m.Err != nil {
+			if errors.Is(err, websocketSessions.ErrGetMessageTimeout) { // Don't crash on non-found message
+				continue
+			}
+			fmt.Println("Error reading from websocket on client:", m.Err)
+			panic("NO RESPONSE") // TODO: WHAT HERE????
 		}
-		switch msgType {
+		var outgoing *websocketSessions.SocketMessage
+		switch m.MsgType {
 		case websocket.PingMessage: // For keeping session alive
-			if err = c.WriteMessage(websocket.PingMessage, []byte{}); err != nil { // TODO: pongHandler?
+			err = m.ValidateRenewalRequest(clientName)
+			if err != nil {
+				panic("NO RESPONSE") // TODO: WHAT HERE????
+			}
+			outgoing = websocketSessions.NewRenewalResponse(secret)
+			err = outgoing.WriteTo(c) // TODO: move
+			if err != nil {
 				fmt.Println("Error writing ping to websocket from client:", err) // TODO: handle?
 			}
 			continue
@@ -81,7 +94,45 @@ func main() {
 			println("closing websocket") // TODO: ok?
 			return
 		case websocket.BinaryMessage:
-			incoming, outgoing := websocketSessions.SocketMessage{}, websocketSessions.NewMsg()
+			if len(m.Bytes) == 0 {
+				panic("EMPTY BINARY MESSAGE")
+			}
+			switch m.Bytes[0] {
+			case websocketSessions.FirstByteRead:
+				if err = m.ValidateReadRequest(); err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+				rres, err := readUserData()
+				if err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+				outgoing = websocketSessions.NewReadResponse(rres)
+				err = outgoing.WriteTo(c) // TODO MOVE
+				if err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+
+			case websocketSessions.FirstByteWrite:
+				toWrite, err := m.ValidateWriteRequest()
+				if err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+				err = writeUserData(toWrite)
+				if err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+				outgoing = websocketSessions.NewWriteRequest(toWrite)
+				err = outgoing.WriteTo(c) // TODO: MOVE
+				if err != nil {
+					panic("INVALID READ REQUEST") // TODO: CHANGE
+				}
+			default:
+				panic("INVALID BINARY MESSAGE")
+				// TODO: ERROR!!!!!
+			}
+
+			var outgoing *websocketSessions.SocketMessage
+			incoming := websocketSessions.SocketMessage{},
 			if err = json.Unmarshal(msgBytes, &incoming); err != nil {
 				err = outgoing.WithType(websocketSessions.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
 				if err != nil {
