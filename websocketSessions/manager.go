@@ -549,7 +549,7 @@ func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr
 	return nil
 }
 
-var ServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	mgr := GetSessionManager(ctx)
 	if mgr == nil {
@@ -579,7 +579,7 @@ var ServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r 
 		return
 	}
 	_ = <-ctx.Done() // Keep request alive until ready to close connection
-})
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
