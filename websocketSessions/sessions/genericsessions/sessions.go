@@ -7,7 +7,11 @@ import (
 	"time"
 )
 
-// TODO: EVERYTHING BELOW HERE IS NEW AND WE MAY WANT TO CONSIDER SWITCHING TO IT
+var (
+	ErrSessionNotFound = errors.New("session not found")
+	ErrExpired         = errors.New("session expired")
+	ErrBadSession      = errors.New("bad session found in storage")
+)
 
 type FullSession[T any, U comparable] struct {
 	Id     U
@@ -42,15 +46,15 @@ type Map[T any, U comparable] struct {
 func (sm *Map[T, U]) GetSession(id U) utils.Result[Session[T]] {
 	sessObj, ok := sm.sessions.Load(id)
 	if !ok {
-		return utils.ErroredResult[Session[T]](errors.New("session not found")) // TODO: FIX
+		return utils.ErroredResult[Session[T]](ErrSessionNotFound)
 	}
 	sess, ok := sessObj.(Session[T])
 	if !ok {
-		return utils.ErroredResult[Session[T]](errors.New("bad session in storage")) // TODO: FIX
+		return utils.ErroredResult[Session[T]](ErrBadSession)
 	}
 	if sess.Expiry.Before(time.Now()) {
 		sm.sessions.Delete(id)
-		return utils.ErroredResult[Session[T]](errors.New("session expired")) // TODO: FIX
+		return utils.ErroredResult[Session[T]](ErrExpired)
 	}
 	// Update session expiry
 	return utils.SuccessfulResult(sm.AddSession(id, sess))
