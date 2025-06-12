@@ -558,7 +558,7 @@ var ServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r 
 	}
 	conn, errUpgr := upgrader.Upgrade(w, r, nil)
 	if errUpgr != nil {
-		fmt.Println("Error upgrading connection: ", errUpgr)
+		fmt.Println("Error upgrading connection:", errUpgr)
 	}
 	defer conn.Close()
 
