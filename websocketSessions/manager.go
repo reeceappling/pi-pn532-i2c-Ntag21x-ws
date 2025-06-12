@@ -549,8 +549,7 @@ func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr
 	return nil
 }
 
-// TODO: THIS NEEDS TO BE HEAVILY ALTERED
-var WsServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+var ServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	mgr := GetSessionManager(ctx)
 	if mgr == nil {
