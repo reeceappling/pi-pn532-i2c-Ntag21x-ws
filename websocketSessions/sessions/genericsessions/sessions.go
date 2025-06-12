@@ -13,6 +13,8 @@ var (
 	ErrBadSession      = errors.New("bad session found in storage")
 )
 
+// TODO: consider switching other sessions to these
+
 type FullSession[T any, U comparable] struct {
 	Id     U
 	Data   T
