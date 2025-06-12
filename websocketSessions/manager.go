@@ -26,8 +26,9 @@ const (
 )
 
 var (
-	ErrNoSessionManager = errors.New("session manager not found. Server is improperly configured")
-	ErrSecretMismatch   = errors.New("secret mismatch")
+	ErrNoSessionManager     = errors.New("session manager not found. Server is improperly configured")
+	ErrSecretMismatch       = errors.New("secret mismatch")
+	ErrSessionAlreadyExists = errors.New("a session by that name already exists")
 )
 
 type SignupRequest struct {
@@ -141,6 +142,25 @@ func GetSessionManager(ctx context.Context) *SessionManager {
 	return mgr
 }
 
+func (mgr *SessionManager) ValidateSignupRequest(reqMsg ReceivedMsg) (req SignupRequest, err error) {
+	if reqMsg.Err != nil {
+		return SignupRequest{}, reqMsg.Err
+	}
+	if mgr == nil {
+		return SignupRequest{}, ErrNoSessionManager
+	}
+	var reqBytes []byte
+	reqBytes, err = reqMsg.getResponseData(MessageTypeSignup, firstByteSignup)
+	if err != nil {
+		return
+	}
+	err = json.Unmarshal(reqBytes, &req)
+	if err != nil {
+		return SignupRequest{}, err // TODO: ok?
+	}
+	return
+}
+
 func (mgr *SessionManager) ReadRfid(readerName RfidReaderName) ([RfidByteSize]byte, error) {
 	if mgr == nil {
 		return [RfidByteSize]byte{}, ErrNoSessionManager
@@ -163,7 +183,8 @@ func (mgr *SessionManager) WriteRfid(readerName RfidReaderName, toWrite [RfidByt
 	return sess.TryWriteRFID(toWrite)
 }
 
-func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session, req SignupRequest) (err error) {
+// TODO: ctx in Add so we can .Done()?
+func (mgr *SessionManager) Add(ctx context.Context, s *Session, req SignupRequest) (err error) {
 	if mgr == nil {
 		return ErrNoSessionManager
 	}
@@ -183,8 +204,7 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 		delete(mgr.sessions, req.Name)
 		s.expiryTimer.Stop()
 		s.managed = false
-		close(s.closer)
-		sessionCancelFunc()
+		s.close() // TODO: ensure used right
 		return err
 	}
 
@@ -193,8 +213,6 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 			s.expiryTimer.Stop()
 			delete(mgr.sessions, req.Name)
 			s.managed = false
-			close(s.closer)
-			sessionCancelFunc()
 		}()
 
 		for {
@@ -202,7 +220,7 @@ func (mgr *SessionManager) Add(sessionCancelFunc context.CancelFunc, s *Session,
 			case <-s.expiryTimer.C:
 				// TODO: retries?
 				err = s.tryRenew(string(req.Name), mgr.secret) // This will close it if renew fails enough
-			case <-s.closer:
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -219,7 +237,7 @@ type Session struct { // TODO: reevaluate
 	expires          time.Time
 	maxCheckFailures int
 	requestTimeout   time.Duration
-	closer           chan bool
+	close            context.CancelFunc
 	mutex            *sync.Mutex
 	managed          bool
 	ttl              time.Duration
@@ -227,7 +245,7 @@ type Session struct { // TODO: reevaluate
 	failedChecks     int
 }
 
-func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
+func NewSession(cancelFunc context.CancelFunc, conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
 	sessionTimeout := utils.Default(sessionTTL, 5*time.Minute)
 	timeout := utils.Default(reqTimeout, 30*time.Second)
 	return &Session{
@@ -237,7 +255,7 @@ func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *tim
 		expires:          time.Now().Add(timeout), // TODO: ensure this is ok
 		requestTimeout:   timeout,
 		mutex:            &sync.Mutex{},
-		closer:           make(chan bool),
+		close:            cancelFunc,
 		managed:          false,
 		expiryTimer:      time.NewTimer(sessionTimeout),
 		failedChecks:     0,
@@ -246,11 +264,8 @@ func NewSession(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *tim
 
 // Does nothing if a session has not been added to a SessionManager or has been closed
 func (sess *Session) End() { // TODO: reevaluate
-	// TODO: use mutex
 	if sess.managed {
-		go func() {
-			sess.closer <- true
-		}()
+		sess.close()
 	}
 }
 
@@ -355,7 +370,8 @@ func (s *Session) processSuccessfulRenewal() {
 func (s *Session) processRenewalFailure() {
 	s.failedChecks++
 	if s.failedChecks > s.maxCheckFailures { // TODO: ok?
-		s.closer <- true
+		s.close()
+		return
 	}
 	s.SetSessionExpiration(time.Now().Add(s.ttl)) // TODO: may now be unnecessary
 	s.expiryTimer.Reset(s.ttl)
@@ -531,4 +547,44 @@ func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr
 		return fmt.Errorf(`received incorrect secret on %s`, what)
 	}
 	return nil
+}
+
+// TODO: THIS NEEDS TO BE HEAVILY ALTERED
+var WsServerHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	mgr := GetSessionManager(ctx)
+	if mgr == nil {
+		http.Error(w, ErrNoSessionManager.Error(), http.StatusInternalServerError)
+		return
+	}
+	conn, errUpgr := upgrader.Upgrade(w, r, nil)
+	if errUpgr != nil {
+		fmt.Println("Error upgrading connection:", errUpgr)
+	}
+	defer conn.Close()
+
+	//try to read and validate format of signup message
+	req, err := mgr.ValidateSignupRequest(TryGetMessage(ctx, conn))
+	if err != nil {
+		return // TODO: ok?
+	}
+	timeBtwnChecks := 30 * time.Second // TODO: ok?
+	maxFailures := 1                   // TODO: ok?
+	requestTimeout := 10 * time.Second // TODO: ok?
+	sessionTimeout := 5 * time.Minute  // TODO: ok?
+	ctx, sessionCancelFunc := context.WithCancel(r.Context())
+	newSession := NewSession(sessionCancelFunc, conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
+	err = mgr.Add(ctx, newSession, req)
+	if err != nil {
+		fmt.Println("Error adding websocket session:", err)
+		return
+	}
+	_ = <-ctx.Done() // Keep request alive until ready to close connection
+})
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+		//return r.Header.Get("Origin") == "<http://yourdomain.com>" // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
+	},
 }
