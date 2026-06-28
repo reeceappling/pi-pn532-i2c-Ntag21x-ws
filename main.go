@@ -22,10 +22,10 @@ func main() {
 	if serverHostname == "" {
 		panic("SERVER_HOSTNAME env var nonexistent")
 	}
-	namespace := os.Getenv("THIS_NAMESPACE")
-	if namespace == "" {
-		panic("THIS_NAMESPACE env var nonexistent")
-	}
+	//namespace := os.Getenv("THIS_NAMESPACE")
+	//if namespace == "" {
+	//	panic("THIS_NAMESPACE env var nonexistent")
+	//}
 	// TODO: setup reader/writer
 	// Get clientName and signupSecret
 	secret := os.Getenv("RFID_SECRET")
@@ -39,7 +39,7 @@ func main() {
 	clientName := string(bs)
 	ctx := context.Background()
 
-	err, closeClient := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
+	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
 	if err != nil {
 	}
 	defer closeClient()
@@ -117,9 +117,10 @@ func main() {
 				outgoing = shared.NewReadResponse(rres)
 				err = outgoing.WriteTo(c) // TODO MOVE
 				if err != nil {
+					println("invalid read request, failed to write response to websocket:", err.Error())
 					panic("INVALID READ REQUEST") // TODO: CHANGE
 				}
-
+				continue
 			case shared.FirstByteWrite:
 				toWrite, err := m.ValidateWriteRequest()
 				if err != nil {
@@ -132,16 +133,18 @@ func main() {
 				outgoing = shared.NewWriteRequest(toWrite)
 				err = outgoing.WriteTo(c) // TODO: MOVE
 				if err != nil {
-					panic("INVALID READ REQUEST") // TODO: CHANGE
+					println("invalid write request, failed to write response to websocket:", err.Error())
+					panic("INVALID WRITE REQUEST") // TODO: CHANGE
 				}
 			default:
 				panic("INVALID BINARY MESSAGE")
 				// TODO: ERROR!!!!!
 			}
+			continue
 
 			var outgoing *shared.SocketMessage
 			incoming := shared.SocketMessage{}
-			if err = json.Unmarshal(msgBytes, &incoming); err != nil {
+			if err = json.Unmarshal(m.Bytes, &incoming); err != nil { // TODO: unsure if m.Bytes is ok here... used to be msgBytes
 				err = outgoing.WithType(shared.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
 				if err != nil {
 					fmt.Println("Error writing error to websocket for binary msg:", err.Error()) // TODO: handle?
@@ -173,7 +176,7 @@ func main() {
 			}
 
 		case websocket.TextMessage:
-			msgString := string(msgBytes)
+			msgString := string(m.Bytes)
 			switch msgString {
 			case websocketSessions.ReadEndpt: // TODO: ONLY OUTPUTS BASE 2!!!!
 				readResponse, err := readUserData() // Read tag data
@@ -188,7 +191,7 @@ func main() {
 				fmt.Printf(`Unsupported text message: %s`, msgString)
 			}
 		default:
-			fmt.Printf(`Unsupported websocket messageType: %d`, msgType)
+			fmt.Printf(`Unsupported websocket messageType: %d`, m.MsgType)
 		}
 	}
 }

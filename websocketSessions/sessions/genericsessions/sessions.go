@@ -15,9 +15,9 @@ var (
 
 // TODO: consider switching other sessions to these
 
-type FullSession[T any, U comparable] struct {
-	Id     U
-	Data   T
+type FullSession[from comparable, To any] struct {
+	Id     from
+	Data   To
 	Expiry time.Time
 }
 
@@ -32,51 +32,62 @@ func (sess Session[T]) WithUpdatedExpiry(ttl time.Duration) Session[T] {
 	return out
 }
 
-func NewMap[T any, U comparable](ttl time.Duration) Map[T, U] {
-	return Map[T, U]{
-		sessions: sync.Map{},
-		ttl:      ttl,
+func NewMap[From comparable, To any](ttl time.Duration, cleanupCallback func(From, To) error) Map[From, To] {
+	cuFunc := func(from From, to To) error { return nil }
+	if cleanupCallback != nil {
+		cuFunc = cleanupCallback
+	}
+	return Map[From, To]{
+		sessions:         sync.Map{},
+		ttl:              ttl,
+		extraCleanupFunc: cuFunc,
 	}
 }
 
 // Map should not be created as sessions.Map{}. Create with sessions.NewMap(ttl)
-type Map[T any, U comparable] struct {
-	sessions sync.Map //map[string]session
-	ttl      time.Duration
+type Map[From comparable, To any] struct {
+	sessions         sync.Map //map[string]session
+	ttl              time.Duration
+	extraCleanupFunc func(From, To) error // TODO: DO THIS, OR GET RID OF?
 }
 
-func (sm *Map[T, U]) GetSession(id U) utils.Result[Session[T]] {
+func (sm *Map[From, To]) GetSession(id From, refreshTTL bool) utils.Result[Session[To]] { // TODO: PUSH THIS UPDATE TO THE REPO
 	sessObj, ok := sm.sessions.Load(id)
 	if !ok {
-		return utils.ErroredResult[Session[T]](ErrSessionNotFound)
+		return utils.ErroredResult[Session[To]](ErrSessionNotFound)
 	}
-	sess, ok := sessObj.(Session[T])
+	sess, ok := sessObj.(Session[To])
 	if !ok {
-		return utils.ErroredResult[Session[T]](ErrBadSession)
+		return utils.ErroredResult[Session[To]](ErrBadSession)
 	}
 	if sess.Expiry.Before(time.Now()) {
+		// TODO: CLEANUP?????
 		sm.sessions.Delete(id)
-		return utils.ErroredResult[Session[T]](ErrExpired)
+		return utils.ErroredResult[Session[To]](ErrExpired)
 	}
-	// Update session expiry
-	return utils.SuccessfulResult(sm.AddSession(id, sess))
+	out := sess
+	if refreshTTL {
+		// Update session expiry
+		out = sm.AddSession(id, sess)
+	}
+	return utils.SuccessfulResult(out)
 }
 
-func (sm *Map[T, U]) RefreshSession(id U, sess Session[T]) Session[T] {
+func (sm *Map[From, To]) RefreshSession(id From, sess Session[To]) Session[To] {
 	return sm.AddSession(id, sess)
 }
 
-func (sm *Map[T, U]) AddSession(id U, sess Session[T]) Session[T] {
+func (sm *Map[From, To]) AddSession(id From, sess Session[To]) Session[To] {
 	updatedSess := sess.WithUpdatedExpiry(sm.ttl)
 	sm.sessions.Store(id, updatedSess)
 	return updatedSess
 }
 
-func (sm *Map[T, U]) NewSession(id U, data T) (Session[T], error) { // TODO: DONT OVERWRITE AN EXISTING SESSION!
+func (sm *Map[From, To]) NewSession(id From, data To) (Session[To], error) { // TODO: DONT OVERWRITE AN EXISTING SESSION!
 	if _, exists := sm.sessions.Load(id); exists {
-		return Session[T]{}, errors.New("session with that ID already exists")
+		return Session[To]{}, errors.New("session with that ID already exists")
 	}
-	updatedSess := Session[T]{
+	updatedSess := Session[To]{
 		Data:   data,
 		Expiry: time.Time{},
 	}.WithUpdatedExpiry(sm.ttl)
@@ -84,10 +95,10 @@ func (sm *Map[T, U]) NewSession(id U, data T) (Session[T], error) { // TODO: DON
 	return updatedSess, nil
 }
 
-func (sm *Map[T, U]) ClearOldSessions() {
+func (sm *Map[From, To]) ClearOldSessions() {
 	now := time.Now()
 	sm.sessions.Range(func(key, value interface{}) bool {
-		sess, ok := value.(Session[T])
+		sess, ok := value.(Session[To])
 		if !ok || sess.Expiry.Before(now) {
 			sm.sessions.Delete(key)
 		}
