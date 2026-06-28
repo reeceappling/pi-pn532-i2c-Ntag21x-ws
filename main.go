@@ -22,21 +22,23 @@ func main() {
 	if serverHostname == "" {
 		panic("SERVER_HOSTNAME env var nonexistent")
 	}
-	//namespace := os.Getenv("THIS_NAMESPACE")
-	//if namespace == "" {
-	//	panic("THIS_NAMESPACE env var nonexistent")
-	//}
+	namespace := os.Getenv("THIS_NAMESPACE") // TODO: USE THIS!
+	if namespace == "" {
+		panic("THIS_NAMESPACE env var nonexistent")
+	}
 	// TODO: setup reader/writer
 	// Get clientName and signupSecret
 	secret := os.Getenv("RFID_SECRET")
 	if secret == "" {
 		panic("RFID_SECRET env var nonexistent")
 	}
-	bs, err := os.ReadFile("/config/rfidName.txt")
-	if err != nil {
-		panic("failed to read nameFile!")
-	}
-	clientName := string(bs)
+
+	//bs, err := os.ReadFile("/config/rfidName.txt")
+	//if err != nil {
+	//	panic("failed to read nameFile!")
+	//}
+	//clientName := string(bs)
+	clientName := namespace
 	ctx := context.Background()
 
 	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
