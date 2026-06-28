@@ -45,10 +45,7 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 	}
 	client.conn = conn
 	err = client.connectAndListen(clientCtx)
-	if err != nil {
-		return nil, err
-	}
-	return closeFunc, nil
+	return closeFunc, err
 }
 
 func (client Client) Close() {
@@ -78,8 +75,9 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 
 	err = client.signUp(ctx)
 	if err != nil {
-		return
+		return err
 	}
+	//go func() { // TODO: ?????
 	// TODO: ensure we won't get colliding messages
 	// Start listening for real messages
 	for {
@@ -94,6 +92,7 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 			}
 		}
 	}
+	//}()
 }
 
 func (client Client) listenAndHandleOne(ctx context.Context) error {
@@ -172,9 +171,9 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 }
 
 func readUserData() (out [shared.RfidByteSize]byte, err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := OpenDevice() // TODO: get device globally????
 	if err != nil {
-		return out, errors.Join(errors.New("failed to open device"), err)
+		return [shared.RfidByteSize]byte{}, errors.Join(errors.New("failed to open device"), err)
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -195,7 +194,7 @@ func readUserData() (out [shared.RfidByteSize]byte, err error) {
 }
 
 func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := OpenDevice() // TODO: get device globally????
 	if err != nil {
 		return errors.Join(errors.New("failed to open device"), err)
 	}
@@ -217,8 +216,16 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
 }
 
-func responseForWrite(newUID [shared.RfidByteSize]byte) (err error) {
+func OpenDevice() (nfc.Device, error) {
 	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	if err != nil {
+		return device, err
+	}
+	return device, nil
+}
+
+func responseForWrite(newUID [shared.RfidByteSize]byte) (err error) { // TODO: ????
+	device, err := OpenDevice() // TODO: get device globally????
 	if err != nil {
 		return errors.Join(errors.New("failed to open device"), err)
 	}
