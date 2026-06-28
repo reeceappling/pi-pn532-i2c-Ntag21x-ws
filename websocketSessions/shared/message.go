@@ -55,57 +55,44 @@ type SignupRequest struct {
 	Secret string
 }
 
-func NewErrorResponse(err error) *SocketMessage {
+func NewSocketMessage(typ int, data []byte) *SocketMessage {
 	return &SocketMessage{
-		Type: websocket.TextMessage,
-		Data: []byte(err.Error()),
+		Type: typ,
+		Data: data,
 	}
+}
+func NewErrorResponse(err error) *SocketMessage {
+	return NewSocketMessage(websocket.TextMessage /* TODO: is this ok?*/, []byte(err.Error()))
 }
 func NewReadRequest() *SocketMessage {
-	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: []byte{FirstByteRead},
-	}
+	return NewSocketMessage(websocket.BinaryMessage, []byte{FirstByteRead})
 }
 func NewReadResponse(r [RfidByteSize]byte) *SocketMessage {
-	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: append([]byte{FirstByteRead}, r[:]...),
-	}
+	return NewSocketMessage(websocket.BinaryMessage, append([]byte{FirstByteRead}, r[:]...))
 }
 func NewWriteRequest(w [RfidByteSize]byte) *SocketMessage { // TODO: req/res are the same for this one
-	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: append([]byte{FirstByteWrite}, w[:]...),
-	}
+	return NewSocketMessage(websocket.BinaryMessage, append([]byte{FirstByteWrite}, w[:]...))
 }
+
 func NewSignupRequest(readerName, secret string) *SocketMessage {
 	bs, _ := json.Marshal(SignupRequest{
 		Name:   RfidReaderName(readerName),
 		Secret: secret,
 	})
-	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: append([]byte{FirstByteSignup}, bs...),
-	}
+	data := append([]byte{FirstByteSignup}, bs...)
+	return NewSocketMessage(websocket.BinaryMessage, data)
 }
 func NewSignupResponse(clientName RfidReaderName) *SocketMessage { // TODO: do we even need this?
-	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: append([]byte{FirstByteSignup}, []byte(clientName)...),
-	}
+	data := append([]byte{FirstByteSignup}, []byte(clientName)...)
+	return NewSocketMessage(websocket.BinaryMessage, data)
 }
 func NewRenewalRequest(readerName string) *SocketMessage {
-	return &SocketMessage{
-		Type: websocket.PingMessage, // TODO: is this ok?
-		Data: append([]byte{FirstByteRenew}, []byte(readerName)...),
-	}
+	data := append([]byte{FirstByteRenew}, []byte(readerName)...)
+	return NewSocketMessage(websocket.PingMessage /* TODO: is this ok?*/, data)
 }
 func NewRenewalResponse(secret string) *SocketMessage { // TODO: USE THIS
-	return &SocketMessage{
-		Type: websocket.PongMessage,
-		Data: append([]byte{FirstByteRenew}, []byte(secret)...),
-	}
+	data := append([]byte{FirstByteRenew}, []byte(secret)...) // TODO: is this ok????
+	return NewSocketMessage(websocket.PongMessage /* TODO: is this ok?*/, data)
 }
 func (res ReceivedMsg) ValidateRenewalRequest(expName string) error {
 	return res.genericValidate(websocket.PingMessage, FirstByteRenew, expName, "renewal request")
