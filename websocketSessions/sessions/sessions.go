@@ -17,65 +17,66 @@ type Session struct { // TODO: reevaluate
 	Expires          time.Time
 	maxCheckFailures int
 	requestTimeout   time.Duration
-	Close            context.CancelFunc
-	mutex            *sync.Mutex
-	Managed          bool
-	ttl              time.Duration
-	ExpiryTimer      *time.Timer
-	failedChecks     int
+	Close            func()
+	*sync.Mutex
+	ttl          time.Duration
+	failedChecks int
 }
 
-func New(cancelFunc context.CancelFunc, conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
-	sessionTimeout := utils.Default(sessionTTL, 5*time.Minute)
-	timeout := utils.Default(reqTimeout, 30*time.Second)
+const defaultRequestTimeout = 30 * time.Second
+const defaultSessionTimeout = 5 * time.Minute
+const defaultMaxSessionCheckFailures = 1
+
+func New(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
+	sessionTimeout := utils.Default(sessionTTL, defaultSessionTimeout)
+	timeout := utils.Default(reqTimeout, defaultRequestTimeout)
+	maxRefreshFails := utils.Default(maxCheckFailures, defaultMaxSessionCheckFailures)
 	return &Session{
 		Conn:             conn,
 		ttl:              sessionTimeout,
-		maxCheckFailures: utils.Default(maxCheckFailures, 0),
-		Expires:          time.Now().Add(timeout), // TODO: ensure this is ok
+		maxCheckFailures: maxRefreshFails,
+		Expires:          time.Now().Add(timeout),
 		requestTimeout:   timeout,
-		mutex:            &sync.Mutex{},
-		Close:            cancelFunc,
-		Managed:          false,
-		ExpiryTimer:      time.NewTimer(sessionTimeout),
-		failedChecks:     0,
+		Mutex:            &sync.Mutex{},
+		Close: func() {
+			err := conn.Close()
+			if err != nil {
+				println("Error closing session before adding to sessions: " + err.Error())
+			}
+		}, // TODO: ????
+		failedChecks: 0,
 	}
 }
 
-// Does nothing if a session has not been added to a SessionManager or has been closed
-func (sess *Session) End() { // TODO: reevaluate
-	if sess.Managed {
-		sess.Close()
-	}
-}
+//// Does nothing if a session has not been added to a SessionManager or has been closed
+//func (sess *Session) End() {
+//	sess.Close()
+//}
 
 func (s *Session) processSuccessfulRenewal() {
-	s.SetSessionExpiration(time.Now().Add(s.ttl)) // TODO: may now be unnecessary
 	s.failedChecks = 0
-	s.ExpiryTimer.Reset(s.ttl)
+	s.SetSessionExpiration(time.Now().Add(s.ttl))
 }
 func (s *Session) processRenewalFailure() {
 	s.failedChecks++
-	if s.failedChecks > s.maxCheckFailures { // TODO: ok?
+	if s.failedChecks >= s.maxCheckFailures {
 		s.Close()
 		return
 	}
-	s.SetSessionExpiration(time.Now().Add(s.ttl)) // TODO: may now be unnecessary
-	s.ExpiryTimer.Reset(s.ttl)
+	s.SetSessionExpiration(time.Now().Add(s.ttl))
 }
 
 func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
-	s.mutex.Lock()
-	s.ExpiryTimer.Stop()
-	defer s.mutex.Unlock()
+	s.Lock()
+	defer s.Unlock()
 
 	err := shared.NewRenewalRequest(name).WriteTo(s.Conn) // TODO: pong handler?
 	if err != nil {
 		s.processRenewalFailure()
-		return err
+		return errors.Join(errors.New("failed to send renewal message"), err)
 	}
 	// READ for a ping message (within the allowed timeframe)
-	err = s.TryGetMessage().ValidateRenewalResponse(expSecret)
+	err = s.TryGetMessage(context.Background()).ValidateRenewalResponse(expSecret)
 	if err != nil {
 		s.processRenewalFailure()
 		return errors.Join(errors.New("failed to renew client lease"), err)
@@ -88,29 +89,28 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 	s.Expires = t
 }
 
-func (sess *Session) TryGetMessage() shared.ReceivedMsg {
-	timedCtx, cancel := context.WithTimeout(context.Background(), sess.requestTimeout)
+func (sess *Session) TryGetMessage(ctx context.Context) shared.ReceivedMsg {
+	timedCtx, cancel := context.WithTimeout(ctx, sess.requestTimeout)
 	defer cancel()
 	return shared.TryGetMessage(timedCtx, sess.Conn)
 }
 
-func (sess *Session) TryReadRFID() ([shared.RfidByteSize]byte, error) {
-	sess.mutex.Lock()
-	defer sess.mutex.Unlock()
-	out := [shared.RfidByteSize]byte{}
+func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
+	sess.Lock()
+	defer sess.Unlock()
 	err := shared.NewReadRequest().WriteTo(sess.Conn)
 	if err != nil {
-		return out, err
+		return [shared.RfidByteSize]byte{}, err
 	}
-	return sess.TryGetMessage().ProcessReadResponse()
+	return sess.TryGetMessage(ctx).ProcessReadResponse()
 }
 
-func (sess *Session) TryWriteRFID(toWrite [shared.RfidByteSize]byte) error { // TODO: this is client side
-	sess.mutex.Lock()
-	defer sess.mutex.Unlock()
+func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error { // TODO: this is serverside
+	sess.Lock()
+	defer sess.Unlock()
 	err := shared.NewWriteRequest(toWrite).WriteTo(sess.Conn)
 	if err != nil {
 		return err
 	}
-	return sess.TryGetMessage().ValidateWriteResponse(toWrite)
+	return sess.TryGetMessage(ctx).ValidateWriteResponse(toWrite)
 }

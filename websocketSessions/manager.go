@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/goUtils/v2/utils"
-	"github.com/reeceappling/goUtils/v2/utils/slices"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/sessions"
+	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/sessions/genericsessions"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
-	"golang.org/x/exp/maps"
 	"net/http"
+	"sync"
 
 	"time"
 )
@@ -31,34 +31,66 @@ type SessionManager struct {
 	secret   string
 	cleanup  *time.Ticker
 	done     chan struct{}
+	*sync.RWMutex
 }
 
 var defaultCleanupFrequency = 5 * time.Minute
 
 func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionManager { // TODO: FIXME!!!!!
+	freq := utils.Default(cleanupFrequency, defaultCleanupFrequency)
 	mgr := &SessionManager{
 		sessions: map[shared.RfidReaderName]*sessions.Session{},
 		secret:   secret,
-		cleanup:  time.NewTicker(utils.Default(cleanupFrequency, defaultCleanupFrequency)), // TODO: keep or no?
-		done:     make(chan struct{}),                                                      // TODO: keep or no?
+		cleanup:  time.NewTicker(freq), // TODO: keep or no?
+		done:     make(chan struct{}),  // TODO: keep or no?
+		RWMutex:  &sync.RWMutex{},
 	}
 
 	go func() {
 		defer func() {
-			defer mgr.cleanup.Stop() // TODO: reevaluate?
+			mgr.cleanup.Stop()
+			mgr.Lock()
+			wg := &sync.WaitGroup{}
+			wg.Add(len(mgr.sessions))
 			for _, session := range mgr.sessions {
-				session.End()
+				go func() {
+					session.Close()
+					wg.Done()
+				}()
 			}
+			mgr.Unlock()
+			wg.Wait()
+			println("finished cleaning up session manager")
+			// TODO: ensure anything waiting for locks (like Add) will not work anymore after this
 		}()
 		for {
 			select {
-			case <-mgr.cleanup.C:
-				// TODO: clean up all sessions
-				for _, session := range mgr.sessions {
-					if session.Expires.Before(time.Now()) {
-						session.End()
-					}
+			case <-mgr.cleanup.C: // TODO: rename so we know this tries to renew as well as cleanup
+				mgr.cleanup.Stop()
+				mgr.RLock()
+
+				wgStarted := &sync.WaitGroup{}
+				wgEnded := &sync.WaitGroup{}
+				wgStarted.Add(len(mgr.sessions))
+				wgEnded.Add(len(mgr.sessions))
+				for name, session := range mgr.sessions {
+					go func() {
+						wgStarted.Done()
+						defer wgEnded.Done()
+						now := time.Now()
+						if session.Expires.Before(now) { // TODO: rework this to grab a full lock, figure out everything that needs changes (spread out on a channel), then do all the changes at once, then release the lock, to ensure no lock contention
+							// TODO: pretty sure the map lock and the session-level lock will have issues here
+							errr := session.TryRenew(string(name), mgr.secret) // TODO: ensure this is ok
+							if errr != nil {
+								println(errr.Error()) // TODO: ok?
+							}
+						}
+					}()
 				}
+				wgStarted.Wait()
+				mgr.RUnlock()
+				wgEnded.Wait()
+				mgr.cleanup.Reset(freq)
 			case _, ok := <-mgr.done:
 				if !ok {
 					return
@@ -88,7 +120,23 @@ func (mgr *SessionManager) Middleware() func(http.Handler) http.Handler {
 			childHandlerFunc.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
 
+func (mgr *SessionManager) GetSession(name shared.RfidReaderName) (session *sessions.Session, err error) {
+	if mgr == nil {
+		return nil, ErrNoSessionManager
+	}
+	mgr.RLock()
+	s, exists := mgr.sessions[name]
+	mgr.RUnlock()
+	if !exists {
+		err = genericsessions.ErrSessionNotFound
+	}
+	//if s.Expires.Before(now) { // TODO: cleanup covers this
+	//	// delete the session
+	//	s.Close()
+	//}
+	return s, err
 }
 
 const sessionManagerContextKey = "rfidSessionManager"
@@ -115,75 +163,79 @@ func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req
 	}
 	err = json.Unmarshal(reqBytes, &req)
 	if err != nil {
-		return shared.SignupRequest{}, err // TODO: ok?
+		return shared.SignupRequest{}, err
 	}
 	return
 }
 
-func (mgr *SessionManager) ReadRfid(readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
-	if mgr == nil {
-		return [shared.RfidByteSize]byte{}, ErrNoSessionManager
+func (mgr *SessionManager) ReadRfid(ctx context.Context, readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
+	sess, err := mgr.GetSession(readerName)
+	if err != nil {
+		return [shared.RfidByteSize]byte{}, err
 	}
-	sess, exists := mgr.sessions[readerName]
-	if !exists {
-		return [shared.RfidByteSize]byte{}, utils.NotFound
-	}
-	return sess.TryReadRFID()
+	return sess.TryReadRFID(ctx)
 }
 
-func (mgr *SessionManager) WriteRfid(readerName shared.RfidReaderName, toWrite [shared.RfidByteSize]byte) error {
-	if mgr == nil {
-		return ErrNoSessionManager
+func (mgr *SessionManager) WriteRfid(ctx context.Context, readerName shared.RfidReaderName, toWrite [shared.RfidByteSize]byte) error {
+	sess, err := mgr.GetSession(readerName)
+	if err != nil {
+		return err
 	}
-	sess, exists := mgr.sessions[readerName]
-	if !exists {
-		return utils.NotFound // TODO: move this!
-	}
-	return sess.TryWriteRFID(toWrite)
+	return sess.TryWriteRFID(ctx, toWrite)
 }
 
-// TODO: ctx in Add so we can .Done()?
-func (mgr *SessionManager) Add(ctx context.Context, s *sessions.Session, req shared.SignupRequest) (err error) {
+func (mgr *SessionManager) Delete(sessionName shared.RfidReaderName) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	delete(mgr.sessions, sessionName)
+}
+
+func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Session, req shared.SignupRequest) (err error) {
 	if mgr == nil {
 		return ErrNoSessionManager
 	}
 	if !mgr.SecretValid(req.Secret) {
 		return ErrSecretMismatch
 	}
-	if existingSession, exists := mgr.sessions[req.Name]; exists { // TODO: rwMutex for this???????
+	mgr.Lock()
+	defer mgr.Unlock()
+	if existingSession, exists := mgr.sessions[req.Name]; exists {
 		err = existingSession.TryRenew(string(req.Name), mgr.secret)
+		existingSession.Close() // TODO: ok?
 		// TODO: check old session and close if it is not working?
 		return errors.New("session already exists") // TODO: MOVE?
 	}
-	s.Managed = true // So we don't close early
-	mgr.sessions[req.Name] = s
 
 	err = shared.NewSignupResponse(req.Name).WriteTo(s.Conn)
 	if err != nil {
-		delete(mgr.sessions, req.Name)
-		s.ExpiryTimer.Stop()
-		s.Managed = false
-		s.Close() // TODO: ensure used right
+		s.Close()
 		return err
 	}
+	mgr.sessions[req.Name] = s
+	s.Close = func() {
+		mgr.Delete(req.Name)
+		// TODO: close the connection???
+		s.Conn.Close()
+		println("session ended: " + req.Name)
+	}
 
-	go func() { // TODO: ensure this is all doing things correctly
-		defer func() {
-			s.ExpiryTimer.Stop()
-			delete(mgr.sessions, req.Name)
-			s.Managed = false
-		}()
-
-		for {
-			select {
-			case <-s.ExpiryTimer.C:
-				// TODO: retries?
-				err = s.TryRenew(string(req.Name), mgr.secret) // This will close it if renew fails enough
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	//go func() { // TODO: ensure this is all doing things correctly
+	//	defer func() {
+	//		//s.ExpiryTimer.Stop()
+	//		delete(mgr.sessions, req.Name)
+	//		s.Managed = false
+	//	}()
+	//
+	//	for {
+	//		select {
+	//		case <-s.ExpiryTimer.C:
+	//			// TODO: retries?
+	//			err = s.TryRenew(string(req.Name), mgr.secret) // This will close it if renew fails enough
+	//		case <-cancellableCtx.Done():
+	//			return
+	//		}
+	//	}
+	//}()
 	return nil
 }
 
@@ -191,14 +243,17 @@ func (mgr *SessionManager) Cleanup() {
 	close(mgr.done)
 }
 
-func (mgr *SessionManager) Sessions() []string {
-	if mgr == nil {
-		return []string{}
-	}
-	return slices.Map(maps.Keys(mgr.sessions), func(n shared.RfidReaderName) string {
-		return string(n)
-	})
-}
+//func (mgr *SessionManager) Sessions() []string {
+//	if mgr == nil {
+//		return []string{}
+//	}
+//	mgr.RLock()
+//	defer mgr.RUnlock()
+//	result := slices.Map(maps.Keys(mgr.sessions), func(n shared.RfidReaderName) string {
+//		return string(n)
+//	})
+//	return result
+//}
 
 /// TODO: TRYING OUT STUFF DOWN HERE!!!!
 
@@ -213,7 +268,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	if errUpgr != nil {
 		fmt.Println("Error upgrading connection:", errUpgr)
 	}
-	defer conn.Close()
+	//defer conn.Close()
 
 	//try to read and validate format of signup message
 	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
@@ -224,19 +279,17 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	maxFailures := 1                   // TODO: ok?
 	requestTimeout := 10 * time.Second // TODO: ok?
 	sessionTimeout := 5 * time.Minute  // TODO: ok?
-	ctx, sessionCancelFunc := context.WithCancel(r.Context())
-	newSession := sessions.New(sessionCancelFunc, conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
+	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
 	err = mgr.Add(ctx, newSession, req)
 	if err != nil {
 		fmt.Println("Error adding websocket session:", err)
 		return
 	}
-	_ = <-ctx.Done() // Keep request alive until ready to close connection
+	// TODO: reenable if not working _ = <-ctx.Done() // Keep request alive until ready to close connection
 }
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
-		//return r.Header.Get("Origin") == "<http://yourdomain.com>" // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
+		return r.Header.Get("Origin") == "mush.appli.ng" // TODO: make dynamic // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
 	},
 }

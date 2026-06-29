@@ -10,6 +10,7 @@ import (
 	"github.com/reeceappling/goUtils/v2/utils"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
 	"log"
+	"net/http"
 	"net/url"
 	"time"
 )
@@ -22,6 +23,13 @@ type Client struct {
 	close         context.CancelFunc
 }
 
+var (
+	ErrHandshakeFailure = errors.New("websocket initial handshake failure")
+	ErrClosing          = errors.New("error closing websocket client connection")
+	ErrNoDialResponse   = errors.New("nil initial response from opening websocket on client")
+	ErrWrongTag         = errors.New("not Ntag21x")
+)
+
 // New starts a new client closeable via the context passed in
 func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePort int, serviceSecret string, customScheme *string) (context.CancelFunc, error) {
 	clientCtx, closeFunc := context.WithCancel(ctx)
@@ -33,15 +41,20 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		serviceSecret: serviceSecret,
 		close:         closeFunc,
 	}
-	conn, resp, err := websocket.DefaultDialer.Dial(client.ServerUrl.String(), nil) // TODO: non-default dialer?
+	headers := http.Header{
+		"Origin": []string{RemoteHost},
+	}
+	conn, resp, err := websocket.DefaultDialer.Dial(client.ServerUrl.String(), headers) // TODO: non-default dialer?
 	if err != nil {
 		if resp == nil {
-			ErrNoDialResponse := errors.New("nil initial response from opening websocket on client") // TODO: MOVE
-			return nil, errors.Join(ErrNoDialResponse, err)
+			return nil, errors.Join(
+				ErrNoDialResponse, err,
+			)
 		}
-		ErrHandshakeFailure := errors.New("websocket initial handshake failure") // TODO: MOVE
-		specificErr := fmt.Errorf("handshake failed with status %d\n", resp.StatusCode)
-		return nil, errors.Join(ErrHandshakeFailure, specificErr)
+		return nil, errors.Join(
+			ErrHandshakeFailure,
+			fmt.Errorf("handshake failed with status %d\n", resp.StatusCode),
+		)
 	}
 	client.conn = conn
 	err = client.connectAndListen(clientCtx)
@@ -68,7 +81,6 @@ func (client Client) signUp(ctx context.Context) (err error) {
 
 func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO: RETURN VALUES
 	defer func() {
-		ErrClosing := errors.New("error closing websocket client connection")
 		errC := client.conn.Close() // Close connection at the end
 		if errC != nil {
 			err = errors.Join(ErrClosing, errC) // TODO: ensure this makes it out in tests!
@@ -80,7 +92,7 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 	if err != nil {
 		return
 	}
-	// TODO: ensure we won't get colliding messages
+	// TODO: ensure we won't get colliding messages (handled manager-side)
 	// Start listening for real messages
 	for {
 		select {
@@ -139,17 +151,17 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 			outgoing = shared.NewReadResponse(tempResp)
 
 		case shared.FirstByteWrite:
-			tempResp, err = m.ValidateWriteRequest()
+			toWrite, err := m.ValidateWriteRequest()
 			if err != nil {
 				outgoing = shared.NewErrorResponse(err)
 				break
 			}
-			err = writeUserData(tempResp)
-			if err != nil {
+
+			if err = writeUserData(toWrite); err != nil {
 				outgoing = shared.NewErrorResponse(errors.Join(errors.New("failed to write tag data"), err))
 				break
 			}
-			outgoing = shared.NewWriteRequest(tempResp)
+			outgoing = shared.NewWriteRequest(toWrite)
 		default:
 			outgoing = shared.NewErrorResponse(errors.New("invalid binary message first byte"))
 		}
@@ -189,7 +201,7 @@ func readUserData() (out [shared.RfidByteSize]byte, err error) {
 		return out, errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return out, errors.New("not Ntag21x") // TODO: fix
+		return out, ErrWrongTag
 	}
 	return readUserDataInternal(tag.(freefare.UltralightTag))
 }
@@ -212,7 +224,7 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 		return errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return errors.New("not Ntag21x") // TODO: fix
+		return ErrWrongTag
 	}
 	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
 }
@@ -235,7 +247,7 @@ func responseForWrite(newUID [shared.RfidByteSize]byte) (err error) {
 		return errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return errors.New("not Ntag21x") // TODO: fix
+		return ErrWrongTag
 	}
 	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
 }

@@ -39,8 +39,10 @@ func main() {
 	clientName := string(bs)
 	ctx := context.Background()
 
-	err, closeClient := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
+	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
 	if err != nil {
+		// TODO: ?????
+		panic(err.Error())
 	}
 	defer closeClient()
 
@@ -211,7 +213,7 @@ func readUserData() (out [8]byte, err error) {
 		return out, errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return out, errors.New("not Ntag21x") // TODO: fix
+		return out, client.ErrWrongTag
 	}
 	return readUserDataInternal(tag.(freefare.UltralightTag))
 }
@@ -234,7 +236,7 @@ func writeUserData(newUID [8]byte) (err error) {
 		return errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return errors.New("not Ntag21x") // TODO: fix
+		return client.ErrWrongTag
 	}
 	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
 }

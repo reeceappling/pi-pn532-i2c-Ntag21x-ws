@@ -89,7 +89,7 @@ func NewSignupRequest(readerName, secret string) *SocketMessage {
 		Data: append([]byte{FirstByteSignup}, bs...),
 	}
 }
-func NewSignupResponse(clientName RfidReaderName) *SocketMessage { // TODO: do we even need this?
+func NewSignupResponse(clientName RfidReaderName) *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.BinaryMessage,
 		Data: append([]byte{FirstByteSignup}, []byte(clientName)...),
@@ -101,7 +101,7 @@ func NewRenewalRequest(readerName string) *SocketMessage {
 		Data: append([]byte{FirstByteRenew}, []byte(readerName)...),
 	}
 }
-func NewRenewalResponse(secret string) *SocketMessage { // TODO: USE THIS
+func NewRenewalResponse(secret string) *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.PongMessage,
 		Data: append([]byte{FirstByteRenew}, []byte(secret)...),
