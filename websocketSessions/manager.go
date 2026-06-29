@@ -165,14 +165,19 @@ func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req
 	if reqMsg.Err != nil {
 		return shared.SignupRequest{}, reqMsg.Err
 	}
+	println("no mgr") // TODO: del
 	if mgr == nil {
 		return shared.SignupRequest{}, ErrNoSessionManager
 	}
+
+	println("checking response data") // TODO: del
 	var reqBytes []byte
 	reqBytes, err = reqMsg.GetResponseData(shared.MessageTypeSignup, shared.FirstByteSignup)
 	if err != nil {
 		return
 	}
+
+	println("unmarshalling response data") // TODO: del
 	err = json.Unmarshal(reqBytes, &req)
 	if err != nil {
 		return shared.SignupRequest{}, err
@@ -286,6 +291,8 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	//try to read and validate format of signup message
 	println("validating signup") // TODO: del
+	// TODO: HANGING HERE!
+
 	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
 	if err != nil {
 		return // TODO: ok?
@@ -294,6 +301,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	maxFailures := 1                   // TODO: ok?
 	requestTimeout := 10 * time.Second // TODO: ok?
 	sessionTimeout := 5 * time.Minute  // TODO: ok?
+	println("Adding session for rfid scanner")
 	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
 	err = mgr.Add(ctx, newSession, req)
 	if err != nil {

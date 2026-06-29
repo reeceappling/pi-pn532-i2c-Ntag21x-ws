@@ -47,7 +47,8 @@ func main() {
 	defer closeClient()
 
 	// TODO: do we want to setup websocket repeatedly?
-	websocketServerUrl := url.URL{Scheme: "ws", Host: serverHostname, Path: "/ws"} // TODO: ENSURE websocket encrypted?????? PORT???
+	// TODO: wss? ws? https?
+	websocketServerUrl := url.URL{Scheme: "wss", Host: serverHostname, Path: "/rfid/ws"} // TODO: ENSURE websocket encrypted?????? PORT???
 	c, resp, errDial := websocket.DefaultDialer.Dial(websocketServerUrl.String(), nil)
 	if errDial != nil {
 		if resp == nil {

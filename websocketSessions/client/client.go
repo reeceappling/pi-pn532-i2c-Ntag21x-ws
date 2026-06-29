@@ -72,13 +72,19 @@ func (client Client) Close() {
 
 func (client Client) signUp(ctx context.Context) (err error) {
 	// send signup message
-	err = shared.NewSignupRequest(client.name, client.serviceSecret).WriteTo(client.conn)
+	sur := shared.NewSignupRequest(client.name, client.serviceSecret)
+	println("created signup request")
+	err = sur.WriteTo(client.conn)
 	if err != nil {
+		println("failed to send signup request")
 		return err
 	}
+	println("trying to get response")
 	ctxTimedOut, cancel := context.WithTimeout(ctx, 5*time.Second) // TODO: ensure timeout ok
 	defer cancel()
-	return shared.TryGetMessage(ctxTimedOut, client.conn).ValidateSignupResponse(client.name)
+	resp := shared.TryGetMessage(ctxTimedOut, client.conn)
+	println("got signup response, validating")
+	return resp.ValidateSignupResponse(client.name)
 }
 
 func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO: RETURN VALUES
