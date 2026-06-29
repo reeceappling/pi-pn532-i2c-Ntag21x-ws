@@ -39,7 +39,7 @@ func main() {
 	clientName := string(namespace)
 	ctx := context.Background()
 
-	closeClient, err := client.New(ctx, clientName, serverHostname, "/rfid/ws", 443, secret, utils.Pointer("https")) // TODO: unsure about https here!
+	closeClient, err := client.New(ctx, clientName, serverHostname, "/rfid/ws", 443, secret, utils.Pointer("wss")) // TODO: unsure about https/ws/wss here!
 	if err != nil {
 		// TODO: ?????
 		panic(err.Error())
