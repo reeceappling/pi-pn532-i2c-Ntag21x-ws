@@ -154,6 +154,7 @@ type ReceivedMsg struct {
 
 func (res ReceivedMsg) ValidateSignupResponse(expName string) error {
 	if res.Err != nil {
+		println("Got error: " + res.Err.Error()) // TODO: del
 		return res.Err
 	}
 	println("Getting and checking response data") // TODO: del
@@ -161,7 +162,7 @@ func (res ReceivedMsg) ValidateSignupResponse(expName string) error {
 	if err != nil {
 		return err
 	}
-	if string(resp[1:]) != expName { // TODO: [1:]
+	if string(resp) != expName { // TODO: [1:]
 		println("name did not match!") // TODO: del
 		return errors.New("signup response data does not match requested")
 	}

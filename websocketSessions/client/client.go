@@ -98,7 +98,8 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 
 	err = client.signUp(ctx)
 	if err != nil {
-		return
+		println("failed signup: " + err.Error())
+		return err
 	}
 	// TODO: ensure we won't get colliding messages (handled manager-side)
 	// Start listening for real messages
