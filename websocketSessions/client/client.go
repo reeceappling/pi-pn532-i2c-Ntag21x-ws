@@ -42,8 +42,9 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		close:         closeFunc,
 	}
 	headers := http.Header{
-		"Origin": []string{RemoteHost},
+		//"Origin": []string{RemoteHost},
 	}
+	println("dialing", client.ServerUrl.String())
 	conn, resp, err := websocket.DefaultDialer.Dial(client.ServerUrl.String(), headers) // TODO: non-default dialer?
 	if err != nil {
 		if resp == nil {
@@ -54,6 +55,7 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		return nil, errors.Join(
 			ErrHandshakeFailure,
 			fmt.Errorf("handshake failed with status %d\n", resp.StatusCode),
+			err,
 		)
 	}
 	client.conn = conn
