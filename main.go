@@ -78,7 +78,7 @@ func main() {
 	// TODO: ensure we won't get colliding messages
 	// Start listening for real messages
 	for {
-		ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second) // TODO: time ok?
+		ctxTimeout, cancel := context.WithTimeout(ctx, 20*time.Second) // TODO: time ok?
 		m := shared.TryGetMessage(ctxTimeout, c)
 		cancel()
 		if m.Err != nil {
