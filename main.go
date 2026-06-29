@@ -31,11 +31,11 @@ func main() {
 	if secret == "" {
 		panic("RFID_SECRET env var nonexistent")
 	}
-	bs, err := os.ReadFile("/config/rfidName.txt")
-	if err != nil {
-		panic("failed to read nameFile!")
-	}
-	clientName := string(bs)
+	//bs, err := os.ReadFile("/config/rfidName.txt")
+	//if err != nil {
+	//	panic("failed to read nameFile!")
+	//}
+	clientName := string(namespace)
 	ctx := context.Background()
 
 	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
