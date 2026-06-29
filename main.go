@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/clausecker/nfc/v2"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/freefare"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions"
@@ -32,15 +31,17 @@ func main() {
 	if secret == "" {
 		panic("RFID_SECRET env var nonexistent")
 	}
-	bs, err := os.ReadFile("/config/rfidName.txt")
-	if err != nil {
-		panic("failed to read nameFile!")
-	}
-	clientName := string(bs)
+	//bs, err := os.ReadFile("/config/rfidName.txt")
+	//if err != nil {
+	//	panic("failed to read nameFile!")
+	//}
+	clientName := string(namespace)
 	ctx := context.Background()
 
-	err, closeClient := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
+	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
 	if err != nil {
+		// TODO: ?????
+		panic(err.Error())
 	}
 	defer closeClient()
 
@@ -141,7 +142,7 @@ func main() {
 
 			var outgoing *shared.SocketMessage
 			incoming := shared.SocketMessage{}
-			if err = json.Unmarshal(msgBytes, &incoming); err != nil {
+			if err = json.Unmarshal(m.Bytes, &incoming); err != nil {
 				err = outgoing.WithType(shared.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
 				if err != nil {
 					fmt.Println("Error writing error to websocket for binary msg:", err.Error()) // TODO: handle?
@@ -173,7 +174,7 @@ func main() {
 			}
 
 		case websocket.TextMessage:
-			msgString := string(msgBytes)
+			msgString := string(m.Bytes)
 			switch msgString {
 			case websocketSessions.ReadEndpt: // TODO: ONLY OUTPUTS BASE 2!!!!
 				readResponse, err := readUserData() // Read tag data
@@ -188,15 +189,15 @@ func main() {
 				fmt.Printf(`Unsupported text message: %s`, msgString)
 			}
 		default:
-			fmt.Printf(`Unsupported websocket messageType: %d`, msgType)
+			fmt.Printf(`Unsupported websocket messageType: %d`, m.MsgType)
 		}
 	}
 }
 
 func readUserData() (out [8]byte, err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := client.OpenDevice()
 	if err != nil {
-		return out, errors.Join(errors.New("failed to open device"), err)
+		return out, err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -211,15 +212,15 @@ func readUserData() (out [8]byte, err error) {
 		return out, errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return out, errors.New("not Ntag21x") // TODO: fix
+		return out, client.ErrWrongTag
 	}
 	return readUserDataInternal(tag.(freefare.UltralightTag))
 }
 
 func writeUserData(newUID [8]byte) (err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := client.OpenDevice()
 	if err != nil {
-		return errors.Join(errors.New("failed to open device"), err)
+		return err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -234,7 +235,7 @@ func writeUserData(newUID [8]byte) (err error) {
 		return errors.Join(errors.New("failed to connect"), err)
 	}
 	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return errors.New("not Ntag21x") // TODO: fix
+		return client.ErrWrongTag
 	}
 	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
 }
