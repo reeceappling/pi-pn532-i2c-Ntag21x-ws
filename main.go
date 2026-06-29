@@ -143,7 +143,7 @@ func main() {
 
 			var outgoing *shared.SocketMessage
 			incoming := shared.SocketMessage{}
-			if err = json.Unmarshal(msgBytes, &incoming); err != nil {
+			if err = json.Unmarshal(m.Bytes, &incoming); err != nil {
 				err = outgoing.WithType(shared.MessageTypeError).WithData([]byte(err.Error())).WriteTo(c)
 				if err != nil {
 					fmt.Println("Error writing error to websocket for binary msg:", err.Error()) // TODO: handle?
@@ -175,7 +175,7 @@ func main() {
 			}
 
 		case websocket.TextMessage:
-			msgString := string(msgBytes)
+			msgString := string(m.Bytes)
 			switch msgString {
 			case websocketSessions.ReadEndpt: // TODO: ONLY OUTPUTS BASE 2!!!!
 				readResponse, err := readUserData() // Read tag data
@@ -190,7 +190,7 @@ func main() {
 				fmt.Printf(`Unsupported text message: %s`, msgString)
 			}
 		default:
-			fmt.Printf(`Unsupported websocket messageType: %d`, msgType)
+			fmt.Printf(`Unsupported websocket messageType: %d`, m.MsgType)
 		}
 	}
 }
