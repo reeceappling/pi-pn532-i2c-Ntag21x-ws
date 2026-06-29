@@ -12,6 +12,7 @@ import (
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
 	"golang.org/x/exp/maps"
 	"net/http"
+	"sync"
 
 	"time"
 )
@@ -31,16 +32,22 @@ type SessionManager struct {
 	secret   string
 	cleanup  *time.Ticker
 	done     chan struct{}
+	*sync.RWMutex
+	renewalQueue *sessions.RenewalQueue2
 }
 
 var defaultCleanupFrequency = 5 * time.Minute
 
 func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionManager { // TODO: FIXME!!!!!
+
+	renewalQueue := &sessions.RenewalQueue2{}
 	mgr := &SessionManager{
-		sessions: map[shared.RfidReaderName]*sessions.Session{},
-		secret:   secret,
-		cleanup:  time.NewTicker(utils.Default(cleanupFrequency, defaultCleanupFrequency)), // TODO: keep or no?
-		done:     make(chan struct{}),                                                      // TODO: keep or no?
+		sessions:     map[shared.RfidReaderName]*sessions.Session{},
+		secret:       secret,
+		cleanup:      time.NewTicker(utils.Default(cleanupFrequency, defaultCleanupFrequency)), // TODO: keep or no?
+		done:         make(chan struct{}),                                                      // TODO: keep or no?
+		RWMutex:      &sync.RWMutex{},
+		renewalQueue: renewalQueue,
 	}
 
 	go func() {
@@ -50,20 +57,49 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 				session.End()
 			}
 		}()
+		cleanupFreq := utils.Default(cleanupFrequency, defaultCleanupFrequency)
 		for {
-			select {
-			case <-mgr.cleanup.C:
-				// TODO: clean up all sessions
-				for _, session := range mgr.sessions {
-					if session.Expires.Before(time.Now()) {
-						session.End()
-					}
-				}
-			case _, ok := <-mgr.done:
-				if !ok {
-					return
-				}
+			qItem := renewalQueue.Head()
+			if qItem == nil {
+				time.Sleep(cleanupFreq) // TODO: ok? should probably be TTL
 			}
+			thisSess := qItem.Sess
+			if timeLeft := thisSess.Expires.Sub(time.Now()); timeLeft > 0 {
+				time.Sleep(timeLeft + time.Second) // TODO: ok?
+				continue
+			}
+			readerName := "" // TODO: fic!
+			var err error = nil
+			for i := 0; i < 1; i++ {
+				err = thisSess.TryRenew(readerName, secret)
+				if err != nil {
+					// retry soon
+					time.Sleep(time.Second) // TODO: ok?
+					continue
+				}
+				break
+			}
+			if err != nil {
+				// TODO: remove from the queue because it is closed!
+				renewalQueue.RemoveHead()
+			} else {
+				renewalQueue.MoveHeadToTail()
+			}
+			continue
+
+			//select {
+			//case <-mgr.cleanup.C:
+			//	// TODO: clean up all sessions
+			//	for _, session := range mgr.sessions {
+			//		if session.Expires.Before(time.Now()) {
+			//			session.End()
+			//		}
+			//	}
+			//case _, ok := <-mgr.done:
+			//	if !ok {
+			//		return
+			//	}
+			//}
 		}
 	}()
 	return mgr
@@ -103,10 +139,10 @@ func GetSessionManager(ctx context.Context) *SessionManager {
 
 func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req shared.SignupRequest, err error) {
 	if reqMsg.Err != nil {
-		return shared.SignupRequest{}, reqMsg.Err
+		return req, reqMsg.Err
 	}
 	if mgr == nil {
-		return shared.SignupRequest{}, ErrNoSessionManager
+		return req, ErrNoSessionManager
 	}
 	var reqBytes []byte
 	reqBytes, err = reqMsg.GetResponseData(shared.MessageTypeSignup, shared.FirstByteSignup)
@@ -115,18 +151,30 @@ func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req
 	}
 	err = json.Unmarshal(reqBytes, &req)
 	if err != nil {
-		return shared.SignupRequest{}, err // TODO: ok?
+		return req, err // TODO: ok?
 	}
 	return
 }
 
+func NewRfidResult() [shared.RfidByteSize]byte {
+	return [shared.RfidByteSize]byte{}
+}
+
+func (mgr *SessionManager) GetSessionByName(readerName shared.RfidReaderName) (sess *sessions.Session, exists bool) {
+	mgr.RLock()
+	defer mgr.RUnlock()
+	sess, exists = mgr.sessions[readerName]
+	return sess, exists
+}
+
 func (mgr *SessionManager) ReadRfid(readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
+	result := NewRfidResult()
 	if mgr == nil {
-		return [shared.RfidByteSize]byte{}, ErrNoSessionManager
+		return result, ErrNoSessionManager
 	}
-	sess, exists := mgr.sessions[readerName]
+	sess, exists := mgr.GetSessionByName(readerName)
 	if !exists {
-		return [shared.RfidByteSize]byte{}, utils.NotFound
+		return result, utils.NotFound
 	}
 	return sess.TryReadRFID()
 }
@@ -135,7 +183,7 @@ func (mgr *SessionManager) WriteRfid(readerName shared.RfidReaderName, toWrite [
 	if mgr == nil {
 		return ErrNoSessionManager
 	}
-	sess, exists := mgr.sessions[readerName]
+	sess, exists := mgr.GetSessionByName(readerName)
 	if !exists {
 		return utils.NotFound // TODO: move this!
 	}
@@ -150,40 +198,40 @@ func (mgr *SessionManager) Add(ctx context.Context, s *sessions.Session, req sha
 	if !mgr.SecretValid(req.Secret) {
 		return ErrSecretMismatch
 	}
-	if existingSession, exists := mgr.sessions[req.Name]; exists { // TODO: rwMutex for this???????
-		err = existingSession.TryRenew(string(req.Name), mgr.secret)
+	mgr.RLock()
+	existingSession, exists := mgr.sessions[req.ReaderName]
+	mgr.RUnlock()
+	if exists { // TODO: rwMutex for this???????
+		err = existingSession.TryRenew(string(req.ReaderName), mgr.secret)
 		// TODO: check old session and close if it is not working?
 		return errors.New("session already exists") // TODO: MOVE?
 	}
-	s.Managed = true // So we don't close early
-	mgr.sessions[req.Name] = s
-
-	err = shared.NewSignupResponse(req.Name).WriteTo(s.Conn)
-	if err != nil {
-		delete(mgr.sessions, req.Name)
-		s.ExpiryTimer.Stop()
-		s.Managed = false
-		s.Close() // TODO: ensure used right
-		return err
+	renewalItem := &sessions.RenewalItem{Sess: s}
+	mgr.Lock()
+	s.CloseFunc = func() error {
+		mgr.Lock()
+		defer mgr.Unlock()
+		mgr.renewalQueue.RemoveItem(renewalItem)
+		delete(mgr.sessions, req.ReaderName)
+		s.Managed = false // TODO: what does this accomplish? Should we be checking this elsewhere?
+		return s.Conn.Close()
 	}
 
-	go func() { // TODO: ensure this is all doing things correctly
-		defer func() {
-			s.ExpiryTimer.Stop()
-			delete(mgr.sessions, req.Name)
-			s.Managed = false
-		}()
-
-		for {
-			select {
-			case <-s.ExpiryTimer.C:
-				// TODO: retries?
-				err = s.TryRenew(string(req.Name), mgr.secret) // This will close it if renew fails enough
-			case <-ctx.Done():
-				return
-			}
+	mgr.renewalQueue.Append(renewalItem)
+	s.Managed = true // So we don't close early
+	mgr.sessions[req.ReaderName] = s
+	mgr.Unlock()
+	for i := 0; i < 1; i++ { // TODO: is multiple tries here ok?
+		err = shared.NewSignupResponse(req.ReaderName).
+			WriteTo(s.Conn)
+		if err == nil {
+			break
 		}
-	}()
+
+	}
+	if err != nil {
+		return errors.Join(err, s.CloseFunc())
+	}
 	return nil
 }
 
@@ -213,8 +261,8 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	if errUpgr != nil {
 		fmt.Println("Error upgrading connection:", errUpgr)
 	}
-	defer conn.Close()
-
+	defer conn.Close() // TODO: DO THIS IN THE OTHER THING
+	// Do all signup logic!
 	//try to read and validate format of signup message
 	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
 	if err != nil {
@@ -231,7 +279,18 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Error adding websocket session:", err)
 		return
 	}
-	_ = <-ctx.Done() // Keep request alive until ready to close connection
+	// TODO: FIX for reading here?
+	// 4. Read loop (handles client messages)
+	//for {
+	//	_, _, err := conn.ReadMessage()
+	//	if err != nil {
+	//		if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+	//			log.Printf("error: %v", err)
+	//		}
+	//		break
+	//	}
+	//}
+	// TODO: request lifespan is managed in mgr.Add _ = <-ctx.Done() // Keep request alive until ready to close connection // TODO: ok?
 }
 
 var upgrader = websocket.Upgrader{

@@ -108,7 +108,7 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	}
 	var outgoing = &shared.SocketMessage{}
 	switch m.MsgType {
-	case websocket.PingMessage: // For keeping session alive
+	case websocket.PingMessage: // For keeping session alive // TODO: ensure the server does not send a renewal message in the middle of handling another set of requests/responses!
 		err = m.ValidateRenewalRequest(client.name)
 		if err != nil {
 			outgoing = shared.NewErrorResponse(err)

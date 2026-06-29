@@ -51,8 +51,8 @@ const (
 )
 
 type SignupRequest struct {
-	Name   RfidReaderName
-	Secret string
+	ReaderName RfidReaderName
+	Secret     string
 }
 
 func NewSocketMessage(typ int, data []byte) *SocketMessage {
@@ -76,8 +76,8 @@ func NewWriteRequest(w [RfidByteSize]byte) *SocketMessage { // TODO: req/res are
 
 func NewSignupRequest(readerName, secret string) *SocketMessage {
 	bs, _ := json.Marshal(SignupRequest{
-		Name:   RfidReaderName(readerName),
-		Secret: secret,
+		ReaderName: RfidReaderName(readerName),
+		Secret:     secret,
 	})
 	data := append([]byte{FirstByteSignup}, bs...)
 	return NewSocketMessage(websocket.BinaryMessage, data)
@@ -86,11 +86,11 @@ func NewSignupResponse(clientName RfidReaderName) *SocketMessage { // TODO: do w
 	data := append([]byte{FirstByteSignup}, []byte(clientName)...)
 	return NewSocketMessage(websocket.BinaryMessage, data)
 }
-func NewRenewalRequest(readerName string) *SocketMessage {
+func NewRenewalRequest(readerName string) *SocketMessage { // TODO: Comes from the server to client???
 	data := append([]byte{FirstByteRenew}, []byte(readerName)...)
 	return NewSocketMessage(websocket.PingMessage /* TODO: is this ok?*/, data)
 }
-func NewRenewalResponse(secret string) *SocketMessage { // TODO: USE THIS
+func NewRenewalResponse(secret string) *SocketMessage { // TODO: USE THIS // TODO: from client to server???
 	data := append([]byte{FirstByteRenew}, []byte(secret)...) // TODO: is this ok????
 	return NewSocketMessage(websocket.PongMessage /* TODO: is this ok?*/, data)
 }
@@ -146,7 +146,7 @@ func (res ReceivedMsg) ValidateSignupResponse(expName string) error {
 	if err != nil {
 		return err
 	}
-	if string(resp[1:]) != expName {
+	if string(resp[:]) != expName {
 		return errors.New("signup response data does not match requested")
 	}
 	return nil
@@ -180,38 +180,37 @@ func (res ReceivedMsg) ValidateWriteResponse(expectedWritten [RfidByteSize]byte)
 
 func (res *ReceivedMsg) ValidateReadRequest() error {
 	_, err := res.GetResponseData(websocket.BinaryMessage, FirstByteRead)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
-func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err error) {
-	out := [RfidByteSize]byte{}
+func (res ReceivedMsg) ProcessReadResponse() (result [RfidByteSize]byte, err error) {
 	resp, err := res.GetResponseData(websocket.BinaryMessage, FirstByteRead)
+	if err != nil {
+		return result, err
+	}
 	if len(resp) != RfidByteSize {
-		return out, errors.New("bad read response size")
+		return result, errors.New("bad read response size")
 	}
 	return [RfidByteSize]byte(resp), nil
 }
 
-func (res ReceivedMsg) GetResponseData(expMsgType int, expFirstByte byte) (resultWithTypeByte []byte, err error) {
-	resultWithTypeByte = nil
-	msgType, msgBytes := res.MsgType, res.Bytes
+func (res ReceivedMsg) GetResponseData(expMsgType int, expFirstByte byte) (resultWithoutTypeByte []byte, err error) { // TODO: result WITHOUT type byte?
+	resultWithoutTypeByte = nil
 	if res.Err != nil {
 		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
 		return
 	}
 	// validate response is as expected
 	resp := &SocketMessage{}
-	if err = json.Unmarshal(msgBytes, resp); err != nil {
+	if err = json.Unmarshal(res.Bytes, resp); err != nil {
 		return
 	}
-	if msgType == websocket.TextMessage {
+	if res.MsgType == websocket.TextMessage {
+		// Error message
 		err = errors.New(string(resp.Data))
 		return
 	}
-	if msgType != expMsgType {
+	if res.MsgType != expMsgType {
 		err = errors.New("unexpected message format for response")
 		return
 	}
@@ -222,5 +221,5 @@ func (res ReceivedMsg) GetResponseData(expMsgType int, expFirstByte byte) (resul
 	if len(resp.Data) == 1 {
 		return nil, nil // TODO: ok?
 	}
-	return resp.Data[1:], nil
+	return resp.Data[1:], nil // TODO: resp.Data[1:]
 }
