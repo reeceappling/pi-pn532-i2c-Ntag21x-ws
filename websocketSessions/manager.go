@@ -286,6 +286,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	//try to read and validate format of signup message
 	println("validating signup") // TODO: del
+	// TODO: HANGING HERE!
 	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
 	if err != nil {
 		return // TODO: ok?

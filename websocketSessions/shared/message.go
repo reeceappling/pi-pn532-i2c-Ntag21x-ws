@@ -130,6 +130,7 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn) ReceivedMsg {
 	resultChan := make(chan ReceivedMsg, 1)
 	go func() {
 		defer close(resultChan)
+		println("attempting to read message in TryGetMessage") // TODO: del!
 		msgType, bytes, err := conn.ReadMessage()
 		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
@@ -155,11 +156,13 @@ func (res ReceivedMsg) ValidateSignupResponse(expName string) error {
 	if res.Err != nil {
 		return res.Err
 	}
+	println("Getting and checking response data") // TODO: del
 	resp, err := res.GetResponseData(websocket.BinaryMessage, FirstByteSignup)
 	if err != nil {
 		return err
 	}
-	if string(resp[1:]) != expName {
+	if string(resp[1:]) != expName { // TODO: [1:]
+		println("name did not match!") // TODO: del
 		return errors.New("signup response data does not match requested")
 	}
 	return nil
@@ -232,7 +235,7 @@ func (res ReceivedMsg) GetResponseData(expMsgType int, expFirstByte byte) (resul
 		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
 		return
 	}
-	if len(resp.Data) == 1 {
+	if len(resp.Data) == 1 { // TODO: will it ever be 0?
 		return nil, nil // TODO: ok?
 	}
 	return resp.Data[1:], nil
