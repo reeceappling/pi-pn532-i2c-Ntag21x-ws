@@ -138,6 +138,17 @@ func (mgr *SessionManager) GetSession(name shared.RfidReaderName) (session *sess
 	//}
 	return s, err
 }
+func (mgr *SessionManager) Sessions() []string {
+	if mgr == nil {
+		return nil
+	}
+	mgr.RLock()
+	out := make([]string, 0, len(mgr.sessions))
+	for name, _ := range mgr.sessions {
+		out = append(out, string(name))
+	}
+	return out
+}
 
 const sessionManagerContextKey = "rfidSessionManager"
 
