@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/clausecker/nfc/v2"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/freefare"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions"
@@ -196,9 +195,9 @@ func main() {
 }
 
 func readUserData() (out [8]byte, err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := client.OpenDevice()
 	if err != nil {
-		return out, errors.Join(errors.New("failed to open device"), err)
+		return out, err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -219,9 +218,9 @@ func readUserData() (out [8]byte, err error) {
 }
 
 func writeUserData(newUID [8]byte) (err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := client.OpenDevice()
 	if err != nil {
-		return errors.Join(errors.New("failed to open device"), err)
+		return err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)

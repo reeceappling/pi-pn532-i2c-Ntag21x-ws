@@ -183,10 +183,18 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	return nil
 }
 
-func readUserData() (out [shared.RfidByteSize]byte, err error) {
+func OpenDevice() (nfc.Device, error) {
 	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
 	if err != nil {
-		return out, errors.Join(errors.New("failed to open device"), err)
+		return device, errors.Join(errors.New("failed to open device"), err)
+	}
+	return device, nil
+}
+
+func readUserData() (out [shared.RfidByteSize]byte, err error) {
+	device, err := OpenDevice()
+	if err != nil {
+		return out, err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -207,32 +215,9 @@ func readUserData() (out [shared.RfidByteSize]byte, err error) {
 }
 
 func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := OpenDevice()
 	if err != nil {
-		return errors.Join(errors.New("failed to open device"), err)
-	}
-	defer device.Close()
-	tags, err := freefare.GetTags(device)
-	if err != nil {
-		return errors.Join(errors.New("failed to get tags"), err)
-	}
-	if len(tags) != 1 {
-		return fmt.Errorf("expected 1 tags, got %d", len(tags))
-	}
-	tag := tags[0]
-	if err = tag.Connect(); err != nil {
-		return errors.Join(errors.New("failed to connect"), err)
-	}
-	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return ErrWrongTag
-	}
-	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
-}
-
-func responseForWrite(newUID [shared.RfidByteSize]byte) (err error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
-	if err != nil {
-		return errors.Join(errors.New("failed to open device"), err)
+		return err
 	}
 	defer device.Close()
 	tags, err := freefare.GetTags(device)
@@ -253,7 +238,7 @@ func responseForWrite(newUID [shared.RfidByteSize]byte) (err error) {
 }
 
 func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byte, error) {
-	// println("reading user data")
+	println("reading user data") // TODO: del
 	UID := [8]byte{}
 	for i := 0; i <= 1; i++ {
 		userData, err := ntag.ReadPage(uint8(i + 4))
