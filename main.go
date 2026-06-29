@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/freefare"
+	"github.com/reeceappling/goUtils/v2/utils"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/client"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
@@ -38,7 +39,7 @@ func main() {
 	clientName := string(namespace)
 	ctx := context.Background()
 
-	closeClient, err := client.New(ctx, clientName, serverHostname, "/ws", 443, secret, nil)
+	closeClient, err := client.New(ctx, clientName, serverHostname, "/rfid/ws", 443, secret, utils.Pointer("https")) // TODO: unsure about https here!
 	if err != nil {
 		// TODO: ?????
 		panic(err.Error())
