@@ -217,23 +217,28 @@ func (res ReceivedMsg) GetResponseData(expMsgType int, expFirstByte byte) (resul
 	msgType, msgBytes := res.MsgType, res.Bytes
 	if res.Err != nil {
 		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
+		println("res.Err != nil", err.Error()) // TODO: del
 		return
 	}
 	// validate response is as expected
 	resp := &SocketMessage{}
 	if err = json.Unmarshal(msgBytes, resp); err != nil {
+		println("got a non-socketMessage: " + err.Error())
 		return
 	}
 	if msgType == websocket.TextMessage {
 		err = errors.New(string(resp.Data))
+		println("errMsg", string(resp.Data))
 		return
 	}
 	if msgType != expMsgType {
 		err = errors.New("unexpected message format for response")
+		println("unexpected message format for response", msgType, "expected", expMsgType)
 		return
 	}
 	if resp.Data[0] != expFirstByte {
 		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
+		println(err.Error()) // TODO: del
 		return
 	}
 	if len(resp.Data) == 1 { // TODO: will it ever be 0?

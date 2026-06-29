@@ -80,7 +80,7 @@ func (client Client) signUp(ctx context.Context) (err error) {
 		return err
 	}
 	println("trying to get response")
-	ctxTimedOut, cancel := context.WithTimeout(ctx, 5*time.Second) // TODO: ensure timeout ok
+	ctxTimedOut, cancel := context.WithTimeout(ctx, 35*time.Second) // TODO: ensure timeout ok
 	defer cancel()
 	resp := shared.TryGetMessage(ctxTimedOut, client.conn)
 	println("got signup response, validating")
