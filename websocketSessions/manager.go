@@ -143,6 +143,7 @@ func (mgr *SessionManager) Sessions() []string {
 		return nil
 	}
 	mgr.RLock()
+	defer mgr.RUnlock()
 	out := make([]string, 0, len(mgr.sessions))
 	for name, _ := range mgr.sessions {
 		out = append(out, string(name))
@@ -272,16 +273,19 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	mgr := GetSessionManager(ctx)
 	if mgr == nil {
-		http.Error(w, ErrNoSessionManager.Error(), http.StatusInternalServerError)
+		println("no session mgr:" + ErrNoSessionManager.Error())
+		http.Error(w, "no session mgr:"+ErrNoSessionManager.Error(), http.StatusInternalServerError)
 		return
 	}
+	println("upgrading connection") // TODO: del
 	conn, errUpgr := upgrader.Upgrade(w, r, nil)
 	if errUpgr != nil {
-		fmt.Println("Error upgrading connection:", errUpgr)
+		println("Error upgrading connection:", errUpgr.Error())
 	}
 	//defer conn.Close()
 
 	//try to read and validate format of signup message
+	println("validating signup") // TODO: del
 	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
 	if err != nil {
 		return // TODO: ok?
