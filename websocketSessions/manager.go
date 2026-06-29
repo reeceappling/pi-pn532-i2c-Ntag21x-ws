@@ -172,7 +172,13 @@ func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req
 
 	println("checking response data") // TODO: del
 	var reqBytes []byte
-	println(fmt.Sprintf(`reqType %d`, reqMsg.MsgType), "reqBytes "+string(reqMsg.Bytes), "Err: "+reqMsg.Err.Error()) // TODO: del
+	if reqMsg.Err != nil { // TODO: del
+		println("Err: " + reqMsg.Err.Error()) // TODO: del
+	}
+	if reqMsg.Bytes != nil { // TODO: del
+		println("reqBytes " + string(reqMsg.Bytes)) // TODO: del
+	}
+	println(fmt.Sprintf(`reqType %d`, reqMsg.MsgType)) // TODO: del
 	reqBytes, err = reqMsg.GetResponseData(shared.MessageTypeSignup, shared.FirstByteSignup)
 	if err != nil {
 		return
