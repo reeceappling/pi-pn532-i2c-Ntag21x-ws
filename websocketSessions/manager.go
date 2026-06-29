@@ -301,6 +301,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return r.Header.Get("Origin") == "mush.appli.ng" // TODO: make dynamic // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
+		return true
+		//return r.Header.Get("Origin") == "mush.appli.ng" // TODO: make dynamic // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
 	},
 }
