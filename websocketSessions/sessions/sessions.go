@@ -75,8 +75,9 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 		s.processRenewalFailure()
 		return errors.Join(errors.New("failed to send renewal message"), err)
 	}
-	// READ for a ping message (within the allowed timeframe)
-	err = s.TryGetMessage(context.Background()).ValidateRenewalResponse(expSecret)
+	// READ for a pong message (within the allowed timeframe)
+	err = s.TryGetMessage(context.Background(), 5*time.Second). // TODO: time ok?
+									ValidateRenewalResponse(expSecret)
 	if err != nil {
 		s.processRenewalFailure()
 		return errors.Join(errors.New("failed to renew client lease"), err)
@@ -89,11 +90,14 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 	s.Expires = t
 }
 
-func (sess *Session) TryGetMessage(ctx context.Context) shared.ReceivedMsg {
+func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration) shared.ReceivedMsg {
 	timedCtx, cancel := context.WithTimeout(ctx, sess.requestTimeout)
 	defer cancel()
-	return shared.TryGetMessage(timedCtx, sess.Conn)
+	return shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
 }
+
+const readResponseTimeout = 5 * time.Second  // TODO: time ok?
+const writeResponseTimeout = 5 * time.Second // TODO: time ok?
 
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
@@ -102,7 +106,8 @@ func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte
 	if err != nil {
 		return [shared.RfidByteSize]byte{}, err
 	}
-	return sess.TryGetMessage(ctx).ProcessReadResponse()
+	return sess.TryGetMessage(ctx, writeResponseTimeout).
+		ProcessReadResponse()
 }
 
 func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error { // TODO: this is serverside
@@ -112,5 +117,6 @@ func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteS
 	if err != nil {
 		return err
 	}
-	return sess.TryGetMessage(ctx).ValidateWriteResponse(toWrite)
+	return sess.TryGetMessage(ctx, readResponseTimeout).
+		ValidateWriteResponse(toWrite)
 }

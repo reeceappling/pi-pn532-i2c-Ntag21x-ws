@@ -2,7 +2,6 @@ package websocketSessions
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gorilla/websocket"
@@ -161,35 +160,53 @@ func GetSessionManager(ctx context.Context) *SessionManager {
 	return mgr
 }
 
-func (mgr *SessionManager) ValidateSignupRequest(reqMsg shared.ReceivedMsg) (req shared.SignupRequest, err error) {
-	if reqMsg.Err != nil {
-		return shared.SignupRequest{}, reqMsg.Err
-	}
-	println("no mgr") // TODO: del
+func (mgr *SessionManager) ParseAndValidateSignupRequest(reqMsg shared.ReceivedMsg) (req shared.SignupRequest, err error) {
 	if mgr == nil {
-		return shared.SignupRequest{}, ErrNoSessionManager
+		println("no mgr") // TODO: del
+		return req, ErrNoSessionManager
 	}
 
 	println("checking response data") // TODO: del
-	var reqBytes []byte
-	if reqMsg.Err != nil { // TODO: del
-		println("Err: " + reqMsg.Err.Error()) // TODO: del
-	}
-	if reqMsg.Bytes != nil { // TODO: del
-		println("reqBytes " + string(reqMsg.Bytes)) // TODO: del
-	}
-	println(fmt.Sprintf(`reqType %d`, reqMsg.MsgType)) // TODO: del
-	reqBytes, err = reqMsg.GetResponseData(shared.MessageTypeSignup, shared.FirstByteSignup)
+	out, err := reqMsg.AsSignupRequest()
 	if err != nil {
-		return
+		println(err.Error()) // TODO: del
+		return req, err
 	}
+	if out == nil {
+		err = errors.New("got nil response from signup request, should never happen")
+		println(err.Error()) // TODO: del
+		return req, err
+	}
+	return *out, err
+}
+func (mgr *SessionManager) GetAndValidateSignupRequest(ctx context.Context, conn *websocket.Conn) (req shared.SignupRequest, err error) {
+	if mgr == nil {
+		println("no mgr") // TODO: del
+		return req, ErrNoSessionManager
+	}
+	received := shared.TryGetMessage(ctx, conn, 10*time.Second) // TODO: 10 ok?
+	return mgr.ParseAndValidateSignupRequest(received)
 
-	println("unmarshalling response data") // TODO: del
-	err = json.Unmarshal(reqBytes, &req)
-	if err != nil {
-		return shared.SignupRequest{}, err
-	}
-	return
+	//println("checking response data") // TODO: del
+	//var reqBytes []byte
+	//if reqMsg.Err != nil { // TODO: del
+	//	println("Err: " + reqMsg.Err.Error()) // TODO: del
+	//}
+	//if reqMsg.Bytes != nil { // TODO: del
+	//	println("reqBytes " + string(reqMsg.Bytes)) // TODO: del
+	//}
+	//println(fmt.Sprintf(`reqType %d`, reqMsg.MsgType)) // TODO: del // TODO: coming back as 2?
+	//reqBytes, err = reqMsg.GetRequestData(SignupRequestType, shared.FirstByteSignup)
+	//if err != nil {
+	//	return
+	//}
+
+	//println("unmarshalling response data") // TODO: del
+	//err = json.Unmarshal(reqBytes, &req)
+	//if err != nil {
+	//	return shared.SignupRequest{}, err
+	//}
+	//return
 }
 
 func (mgr *SessionManager) ReadRfid(ctx context.Context, readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
@@ -216,9 +233,11 @@ func (mgr *SessionManager) Delete(sessionName shared.RfidReaderName) {
 
 func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Session, req shared.SignupRequest) (err error) {
 	if mgr == nil {
+		s.Close()
 		return ErrNoSessionManager
 	}
 	if !mgr.SecretValid(req.Secret) {
+		s.Close()
 		return ErrSecretMismatch
 	}
 	mgr.Lock()
@@ -226,6 +245,7 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 	if existingSession, exists := mgr.sessions[req.Name]; exists {
 		err = existingSession.TryRenew(string(req.Name), mgr.secret)
 		existingSession.Close() // TODO: ok?
+		// TODO: s.Close()?
 		// TODO: check old session and close if it is not working?
 		return errors.New("session already exists") // TODO: MOVE?
 	}
@@ -282,6 +302,10 @@ func (mgr *SessionManager) Cleanup() {
 /// TODO: TRYING OUT STUFF DOWN HERE!!!!
 
 func ServerHandler(w http.ResponseWriter, r *http.Request) {
+	timeBtwnChecks := 30 * time.Second // TODO: ok?
+	maxFailures := 1                   // TODO: ok?
+	requestTimeout := 10 * time.Second // TODO: ok?
+	sessionTimeout := 5 * time.Minute  // TODO: ok?
 	ctx := r.Context()
 	mgr := GetSessionManager(ctx)
 	if mgr == nil {
@@ -292,7 +316,10 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	println("upgrading connection") // TODO: del
 	conn, errUpgr := upgrader.Upgrade(w, r, nil)
 	if errUpgr != nil {
-		println("Error upgrading connection:", errUpgr.Error())
+		err := errors.Join(errors.New("Error upgrading connection"), errUpgr)
+		println(err.Error()) // TODO: del?
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	//defer conn.Close()
 
@@ -300,14 +327,18 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	println("validating signup") // TODO: del
 	// TODO: HANGING HERE!
 
-	req, err := mgr.ValidateSignupRequest(shared.TryGetMessage(ctx, conn))
+	req, err := mgr.GetAndValidateSignupRequest(ctx, conn)
 	if err != nil {
-		return // TODO: ok?
+		if e := conn.Close(); e != nil {
+			println("failed to close connection on signup request retrieval and parsing: " + e.Error())
+		}
+		return
 	}
-	timeBtwnChecks := 30 * time.Second // TODO: ok?
-	maxFailures := 1                   // TODO: ok?
-	requestTimeout := 10 * time.Second // TODO: ok?
-	sessionTimeout := 5 * time.Minute  // TODO: ok?
+	//req, err := mgr.ParseAndValidateSignupRequest(shared.TryGetMessage(ctx, conn))
+	//if err != nil {
+	//	return // TODO: ok?
+	//}
+
 	println("Adding session for rfid scanner")
 	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
 	err = mgr.Add(ctx, newSession, req)
@@ -321,6 +352,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
+		// TODO: trial doing the origin stuff
 		//return r.Header.Get("Origin") == "mush.appli.ng" // TODO: make dynamic // TODO: this to protect against Cross-Site websocket hijacking (CSWSH)
 	},
 }

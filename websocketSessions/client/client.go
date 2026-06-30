@@ -42,7 +42,7 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		close:         closeFunc,
 	}
 	headers := http.Header{
-		//"Origin": []string{RemoteHost},
+		"Origin": []string{RemoteHost}, // TODO: trial doing the origin stuff! search "trial doing the origin stuff!"
 	}
 	println("dialing", client.ServerUrl.String())
 	conn, resp, err := websocket.DefaultDialer.Dial(client.ServerUrl.String(), headers) // TODO: non-default dialer?
@@ -58,7 +58,7 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 			err,
 		)
 	}
-	client.conn = conn
+	client.conn = conn // TODO: figure out when to close!
 	err = client.connectAndListen(clientCtx)
 	if err != nil {
 		return nil, err
@@ -66,12 +66,29 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 	return closeFunc, nil
 }
 
-func (client Client) Close() {
+func (client Client) Close() { // TODO: figure out where to use!
 	client.close()
 }
 
 func (client Client) signUp(ctx context.Context) (err error) {
 	// send signup message
+	err = client.sendSignupRequest()
+	if err != nil {
+		errr := errors.Join(errors.New("failed sendSignupRequest"), err)
+		println(errr.Error()) // TODO: del
+		return errr
+	}
+
+	// Get and validate signup response
+	err = client.parseAndValidateSignupResponse(ctx)
+	if err != nil {
+		errr := errors.Join(errors.New("failed parseAndValidateSignupResponse"), err)
+		println(errr.Error()) // TODO: del
+		return errr
+	}
+	return nil
+}
+func (client Client) sendSignupRequest() (err error) {
 	sur := shared.NewSignupRequest(client.name, client.serviceSecret)
 	println("created signup request")
 	err = sur.WriteTo(client.conn)
@@ -79,12 +96,19 @@ func (client Client) signUp(ctx context.Context) (err error) {
 		println("failed to send signup request")
 		return err
 	}
-	println("trying to get response")
-	ctxTimedOut, cancel := context.WithTimeout(ctx, 35*time.Second) // TODO: ensure timeout ok
-	defer cancel()
-	resp := shared.TryGetMessage(ctxTimedOut, client.conn)
+	return nil
+}
+func (client Client) parseAndValidateSignupResponse(ctx context.Context) (err error) {
+	println("trying to get response") // TODO: del
+	// Get and validate signup response
+	received := shared.TryGetMessage(ctx, client.conn, 35*time.Second) // TODO: time ok?
 	println("got signup response, validating")
-	return resp.ValidateSignupResponse(client.name)
+	resp, err := received.AsSignupResponse(client.name) // TODO: flip to client.ValidateSignupResponse(m) and remove resp.Validate(client.name)
+	if err != nil {
+		println("failed to parse or invalid response message as signup response: " + err.Error())
+		return err
+	}
+	return resp.Validate(client.name)
 }
 
 func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO: RETURN VALUES
@@ -118,64 +142,43 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 }
 
 func (client Client) listenAndHandleOne(ctx context.Context) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second) // TODO: time ok?
-	m := shared.TryGetMessage(timeoutCtx, client.conn)
-	cancel()
+	// TODO: OVERHAUL????
+	m := shared.TryGetMessage(ctx, client.conn, 10*time.Second)
 	err := m.Err
 	if err != nil {
 		if errors.Is(err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
+			println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
 			return nil
 		}
+		// TODO: probably no error here?
 		return errors.Join(errors.New("failed to read websocket response on client"), m.Err) // TODO: ok that we will crash on this?
 	}
 	var outgoing = &shared.SocketMessage{}
 	switch m.MsgType {
 	case websocket.PingMessage: // For keeping session alive
-		err = m.ValidateRenewalRequest(client.name)
-		if err != nil {
-			outgoing = shared.NewErrorResponse(err)
-			break
-		}
-		outgoing = shared.NewRenewalResponse(client.serviceSecret)
-
+		outgoing = client.handleRenewalRequest(m)
 	case websocket.TextMessage:
 		outgoing = shared.NewErrorResponse(errors.New("reader got an error (text) message from server, should never happen: " + string(m.Bytes)))
 	case websocket.BinaryMessage:
+		if m.Bytes == nil {
+			outgoing = shared.NewErrorResponse(errors.New("reader/writer got a nil binary message, should never happen"))
+			break
+		}
 		if len(m.Bytes) == 0 {
 			outgoing = shared.NewErrorResponse(errors.New("reader/writer got an empty binary message, should never happen"))
 			break
 		}
-		tempResp := [shared.RfidByteSize]byte{}
 		switch m.Bytes[0] {
 		case shared.FirstByteRead:
-			if err = m.ValidateReadRequest(); err != nil {
-				outgoing = shared.NewErrorResponse(err)
-				break
-			}
-			tempResp, err = readUserData()
-			if err != nil {
-				outgoing = shared.NewErrorResponse(err)
-				break
-			}
-			outgoing = shared.NewReadResponse(tempResp)
-
+			outgoing = client.handleReadRequest(m)
 		case shared.FirstByteWrite:
-			toWrite, err := m.ValidateWriteRequest()
-			if err != nil {
-				outgoing = shared.NewErrorResponse(err)
-				break
-			}
-
-			if err = writeUserData(toWrite); err != nil {
-				outgoing = shared.NewErrorResponse(errors.Join(errors.New("failed to write tag data"), err))
-				break
-			}
-			outgoing = shared.NewWriteRequest(toWrite)
+			outgoing = client.handleWriteRequest(m)
 		default:
-			outgoing = shared.NewErrorResponse(errors.New("invalid binary message first byte"))
+			outgoing = shared.NewErrorResponse(fmt.Errorf("invalid binary message first byte %d", m.Bytes[0]))
 		}
 
 	case websocket.CloseMessage: // For closing client
+		// TODO: close the websocket/restart!
 		return errors.New("closing websocket gracefully")
 	default:
 		str := ""
@@ -192,8 +195,38 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	return nil
 }
 
+func (client Client) handleReadRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
+	err := m.ValidateReadRequest()
+	if err != nil {
+		return shared.NewErrorResponse(err)
+	}
+	tempResp, err := readUserData()
+	if err != nil {
+		return shared.NewErrorResponse(err)
+	}
+	return shared.NewReadResponse(tempResp)
+}
+func (client Client) handleRenewalRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
+	err := m.ValidateRenewalRequest(client.name)
+	if err != nil {
+		return shared.NewErrorResponse(err)
+	}
+	return shared.NewRenewalResponse(client.serviceSecret)
+}
+func (client Client) handleWriteRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
+	toWrite, err := m.ValidateWriteRequest()
+	if err != nil {
+		return shared.NewErrorResponse(err)
+	}
+	err = writeUserData(toWrite)
+	if err != nil { // TODO: validate wrote correctly?
+		return shared.NewErrorResponse(errors.Join(errors.New("failed to write tag data"), err))
+	}
+	return shared.NewWriteResponse(toWrite)
+}
+
 func OpenDevice() (nfc.Device, error) {
-	device, err := nfc.Open("pn532_i2c:/dev/i2c-1") // TODO: get device globally????
+	device, err := nfc.Open("pn532_i2c:/dev/i2c-1")
 	if err != nil {
 		return device, errors.Join(errors.New("failed to open device"), err)
 	}
@@ -249,8 +282,8 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byte, error) {
 	println("reading user data") // TODO: del
 	UID := [8]byte{}
-	for i := 0; i <= 1; i++ {
-		userData, err := ntag.ReadPage(uint8(i + 4))
+	for i := 0; i < 2; i++ { // 2 pages of 4 bytes each
+		userData, err := ntag.ReadPage(uint8(i + 4)) // TODO: why +4???? (is it because there are unwriteable or settings bytes in the first 4?)
 		if err != nil {
 			return UID, errors.Join(err, fmt.Errorf("failed to read user data for page %d", i))
 		}
@@ -262,7 +295,8 @@ func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byt
 }
 
 func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteSize]byte) error {
-	initialUID, err := readUserDataInternal(ntag)
+	// TODO: PROBABLY OVERHAUL!
+	initialUID, err := readUserDataInternal(ntag) // TODO: probably dont need
 	if err != nil {
 		log.Fatal(err.Error())
 		return err
@@ -289,8 +323,11 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 	//read again to confirm
 	finalUID, err := readUserDataInternal(ntag)
 	if err != nil {
-		return err
+		// TODO: maybe dont error but just print a warning like so!
+		println("warning: failed to read user data to confirm write")
+		return nil
 	}
+	// Reread to confirm (optional)
 	finalStr := string(finalUID[:])
 	if finalStr != string(newUID[:]) {
 		return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
