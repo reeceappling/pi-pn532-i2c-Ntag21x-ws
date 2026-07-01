@@ -114,11 +114,14 @@ const writeResponseTimeout = 5 * time.Second // TODO: time ok?
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
 	defer sess.Unlock()
+	println("creating read request") // TODO: del
 	err := shared.NewReadRequest().
 		WriteTo(sess.Conn)
 	if err != nil {
+		println("failed to write read request: " + err.Error()) // TODO: del
 		return [shared.RfidByteSize]byte{}, err
 	}
+	println("trying to get response") // TODO: del
 	return sess.TryGetMessage(ctx, readResponseTimeout).
 		ProcessReadResponse()
 }

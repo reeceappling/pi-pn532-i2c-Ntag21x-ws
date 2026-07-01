@@ -212,6 +212,7 @@ func (mgr *SessionManager) GetAndValidateSignupRequest(ctx context.Context, conn
 func (mgr *SessionManager) ReadRfid(ctx context.Context, readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
 	sess, err := mgr.GetSession(readerName)
 	if err != nil {
+		println("failed to get rfid session: " + err.Error()) // TODO: del
 		return [shared.RfidByteSize]byte{}, err
 	}
 	return sess.TryReadRFID(ctx)

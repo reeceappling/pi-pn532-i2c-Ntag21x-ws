@@ -222,6 +222,7 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 		}
 		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
+	println("waiting for response") // TODO: del
 	select {
 	case res := <-resultChan:
 		return res
@@ -348,13 +349,21 @@ func (res ReceivedMsg) ProcessWriteResponse(expectedWritten [RfidByteSize]byte) 
 }
 
 func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err error) {
+	println("processing read response: ") // TODO: del
 	if res.Err != nil {
+		println("error on read response: " + res.Err.Error()) // TODO: del
 		return [RfidByteSize]byte{}, errors.New("error on read response: " + res.Err.Error())
 	}
+	if res.Bytes == nil {
+		println("nil result bytes!: ") // TODO: del
+		return [RfidByteSize]byte{}, errors.New("invalid read response size")
+	}
 	if len(res.Bytes) != RfidByteSize {
+		println("bad byte size, result:" + string(res.Bytes)) // TODO: del
 		return [RfidByteSize]byte{}, errors.New("invalid read response size")
 	}
 	if res.MsgType != ReadResponseType {
+		println("bad response type:", res.MsgType, "should be", ReadResponseType) // TODO: del
 		return [RfidByteSize]byte{}, errors.New("invalid read response type")
 	}
 	//resp, err := res.GetRequestData(websocket.BinaryMessage, FirstByteRead)
