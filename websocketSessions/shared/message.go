@@ -191,7 +191,6 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 		if err != nil {
 			println("err:", err.Error())
 		}
-		println("results:", "type:", msgType, "content:", string(bytes), "err:", err.Error())
 		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
 	select {
