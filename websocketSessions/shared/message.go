@@ -104,8 +104,8 @@ func (msg *SocketMessage) ParseSignupResponse() (out *SignupResponse, err error)
 	if msg == nil {
 		return nil, errors.New("Signup response socket message was nil")
 	}
-	if msg.Type != websocket.TextMessage {
-		return nil, fmt.Errorf(`Signup response type invalid, should be text (1), was %d`, msg.Type)
+	if msg.Type != SignupResponseType {
+		return nil, fmt.Errorf(`2 Signup response type invalid, should be text (%d), was %d`, SignupResponseType, msg.Type)
 	}
 	return &SignupResponse{ClientName: string(msg.Data)}, nil
 }
@@ -114,8 +114,8 @@ func (msg *SocketMessage) ParseSignupRequest() (out *SignupResponse, err error) 
 		return nil, errors.New("Signup response socket message was nil")
 
 	}
-	if msg.Type != websocket.TextMessage {
-		return nil, fmt.Errorf(`Signup response type invalid, should be text (1), was %d`, msg.Type)
+	if msg.Type != SignupResponseType {
+		return nil, fmt.Errorf(`1 Signup response type invalid, should be (%d), was %d`, SignupResponseType, msg.Type)
 	}
 	return &SignupResponse{ClientName: string(msg.Data)}, nil
 }
@@ -135,7 +135,7 @@ func NewSignupRequest(readerName, secret string) *SocketMessage {
 }
 func NewSignupResponse(clientName RfidReaderName) *SocketMessage {
 	return &SocketMessage{
-		Type: SignupResponseType, // TODO; used to be signup!
+		Type: SignupResponseType,
 		Data: []byte(clientName),
 	}
 }
@@ -205,7 +205,7 @@ type ReceivedMsg struct {
 
 func (res ReceivedMsg) AsSignupResponse(expName string) (out *SignupResponse, err error) { // TODO: USE!
 	if res.MsgType != SignupResponseType {
-		return nil, fmt.Errorf(`Signup response type invalid, should be %d, was %d`, SignupResponseType, res.MsgType)
+		return nil, fmt.Errorf(`3 Signup response type invalid, should be %d, was %d`, SignupResponseType, res.MsgType)
 	}
 	if res.Err != nil {
 		return nil, errors.Join(errors.New("Error on signup response"), res.Err)

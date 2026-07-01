@@ -237,8 +237,10 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 		return ErrNoSessionManager
 	}
 	if !mgr.SecretValid(req.Secret) {
+		err = fmt.Errorf("request secret: %s, expected %s", req.Secret, mgr.secret) // TODO: DELETEME!
+		println(err.Error())                                                        // TODO: DELETEME!
 		s.Close()
-		return ErrSecretMismatch
+		return errors.Join(err, ErrSecretMismatch)
 	}
 	mgr.Lock()
 	defer mgr.Unlock()

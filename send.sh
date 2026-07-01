@@ -13,7 +13,8 @@ export GOTMPDIR=/home/reeceappling/gotmp
 go install -v ./...
 export CGO_CFLAGS="-O0 -pipe"
 export CGO_LDFLAGS="-O0"
-go build -o startRfid.goexe -p 1 -v .
+go build -o startRfid.goexe -p 4 -v .
+#CGO_CFLAGS="-O0 -pipe" CGO_LDFLAGS="-O0" go build -o startRfid.goexe -p 4 -v .
 sudo umount /home/reeceappling/gotmp
 unset GOTMPDIR
 unset CGO_CFLAGS
