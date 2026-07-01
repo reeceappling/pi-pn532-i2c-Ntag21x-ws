@@ -128,6 +128,7 @@ func NewSignupRequest(readerName, secret string) *SocketMessage {
 		Name:   RfidReaderName(readerName),
 		Secret: secret,
 	})
+	println("sending signup request:", string(bs))
 	return &SocketMessage{
 		Type: SignupRequestType, // TODO; used to be signup, should this be text?
 		Data: bs,
@@ -183,6 +184,7 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 		defer close(resultChan)
 		println("attempting to read message in TryGetMessage") // TODO: del!
 		msgType, bytes, err := conn.ReadMessage()              // Bytes may include first bytes to define type              // TODO: this will generally be binary or text for non-signup-flow items
+		println("results:", "type:", msgType, "content:", string(bytes), "err:", err.Error())
 		resultChan <- ReceivedMsg{msgType, bytes, err}
 	}()
 	select {
