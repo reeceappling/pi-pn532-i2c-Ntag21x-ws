@@ -184,7 +184,7 @@ func (mgr *SessionManager) GetAndValidateSignupRequest(ctx context.Context, conn
 		println("no mgr") // TODO: del
 		return req, ErrNoSessionManager
 	}
-	received := shared.TryGetMessage(ctx, conn, 10*time.Second) // TODO: 10 ok?
+	received := shared.TryGetMessage(ctx, conn, 20*time.Second) // TODO: 10 ok? 20?
 	return mgr.ParseAndValidateSignupRequest(received)
 
 	//println("checking response data") // TODO: del

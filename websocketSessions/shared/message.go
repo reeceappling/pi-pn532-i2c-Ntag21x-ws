@@ -109,15 +109,17 @@ func (msg *SocketMessage) ParseSignupResponse() (out *SignupResponse, err error)
 	}
 	return &SignupResponse{ClientName: string(msg.Data)}, nil
 }
-func (msg *SocketMessage) ParseSignupRequest() (out *SignupResponse, err error) { // TODO: USE!
+func (msg *SocketMessage) ParseSignupRequest() (out *SignupRequest, err error) { // TODO: USE!
 	if msg == nil {
 		return nil, errors.New("Signup response socket message was nil")
 
 	}
-	if msg.Type != SignupResponseType {
-		return nil, fmt.Errorf(`1 Signup response type invalid, should be (%d), was %d`, SignupResponseType, msg.Type)
+	if msg.Type != SignupRequestType {
+		return nil, fmt.Errorf(`1 Signup request type invalid, should be (%d), was %d`, SignupRequestType, msg.Type)
 	}
-	return &SignupResponse{ClientName: string(msg.Data)}, nil
+	out = &SignupRequest{}
+	err = json.Unmarshal(msg.Data, out)
+	return out, err
 }
 
 const SignupRequestType = websocket.BinaryMessage
@@ -180,8 +182,9 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 	defer cancel()
 
 	resultChan := make(chan ReceivedMsg, 1)
+	defer close(resultChan) // TODO: or in gofunc?
 	go func() {
-		defer close(resultChan)
+		//defer close(resultChan) // TODO: or in gofunc?
 		println("attempting to read message in TryGetMessage") // TODO: del!
 		msgType, bytes, err := conn.ReadMessage()              // Bytes may include first bytes to define type              // TODO: this will generally be binary or text for non-signup-flow items
 		println("results:", "type:", msgType)
@@ -245,10 +248,14 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 			println("reqBytes " + string(res.Bytes)) // TODO: del
 		}
 	}
-	out = &SignupRequest{}
-	err = json.Unmarshal(res.Bytes, out)
+	msg := &SocketMessage{}
+	err = json.Unmarshal(res.Bytes, msg)
 	if err != nil {
-		return nil, errors.Join(errors.New("failed to unmarshal signup request received"), res.Err)
+		return nil, errors.Join(errors.New("failed to unmarshal signup socket message received"), err)
+	}
+	out, err = msg.ParseSignupRequest()
+	if err != nil {
+		return nil, errors.Join(errors.New("failed to unmarshal signup request received"), err)
 	}
 	return out, nil
 }
