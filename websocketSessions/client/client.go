@@ -21,6 +21,9 @@ type Client struct {
 	serviceSecret string
 	conn          *websocket.Conn
 	close         context.CancelFunc
+	// TODO: consider creating a send and receive channel...
+	send    chan<- *shared.SocketMessage
+	recieve <-chan shared.ReceivedMsg
 }
 
 var (
@@ -35,11 +38,13 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 	clientCtx, closeFunc := context.WithCancel(ctx)
 	scheme := utils.Default(customScheme, "ws")
 	host := fmt.Sprintf(`%s:%d`, RemoteHost, RemotePort) // TODO: ensure 443 ok!
+	recieve := make(chan shared.ReceivedMsg)
 	client := Client{
 		name:          Name,
 		ServerUrl:     url.URL{Scheme: scheme, Host: host, Path: RemoteEndpoint},
 		serviceSecret: serviceSecret,
 		close:         closeFunc,
+		recieve:       recieve,
 	}
 	headers := http.Header{
 		"Origin": []string{RemoteHost}, // TODO: trial doing the origin stuff! search "trial doing the origin stuff!"
@@ -59,7 +64,7 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		)
 	}
 	client.conn = conn // TODO: figure out when to close!
-	err = client.connectAndListen(clientCtx)
+	err = client.connectAndListen(clientCtx, recieve)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +116,7 @@ func (client Client) parseAndValidateSignupResponse(ctx context.Context) (err er
 	return resp.Validate(client.name)
 }
 
-func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO: RETURN VALUES
+func (client Client) connectAndListen(ctx context.Context, receive chan shared.ReceivedMsg) (err error) { // TODO: RETURN VALUES
 	defer func() {
 		errC := client.conn.Close() // Close connection at the end
 		if errC != nil {
@@ -125,13 +130,22 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 		println("failed signup: " + err.Error())
 		return err
 	}
+	go func() {
+		for {
+
+		}
+	}()
 	// TODO: ensure we won't get colliding messages (handled manager-side)
 	// Start listening for real messages
+	println("listening for read and write commands") // TODO: del
 	for {
+
 		select {
 		case <-ctx.Done():
 			return err
+
 		default:
+
 			err = client.listenAndHandleOne(ctx)
 			if err != nil {
 				println("fatal error handling request, stopping client")
@@ -142,16 +156,16 @@ func (client Client) connectAndListen(ctx context.Context) (err error) { // TODO
 }
 
 func (client Client) listenAndHandleOne(ctx context.Context) error {
-	// TODO: OVERHAUL????
-	m := shared.TryGetMessage(ctx, client.conn, 10*time.Second)
+	m := shared.TryGetMessage(ctx, client.conn, 30*time.Second)
 	err := m.Err
 	if err != nil {
 		if errors.Is(err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
 			println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
 			return nil
 		}
-		// TODO: probably no error here?
-		return errors.Join(errors.New("failed to read websocket response on client"), m.Err) // TODO: ok that we will crash on this?
+		e := errors.Join(errors.New("failed to read websocket response on client"), m.Err)
+		println("possibly fatal error: ", e.Error())
+		return nil
 	}
 	var outgoing = &shared.SocketMessage{}
 	incoming := m.SocketMsgUnsafe()

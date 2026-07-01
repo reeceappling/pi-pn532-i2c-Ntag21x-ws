@@ -108,8 +108,8 @@ func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration
 	return shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
 }
 
-const readResponseTimeout = 10 * time.Second  // TODO: time ok?
-const writeResponseTimeout = 10 * time.Second // TODO: time ok?
+const readResponseTimeout = 20 * time.Second  // TODO: time ok?
+const writeResponseTimeout = 20 * time.Second // TODO: time ok?
 
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
