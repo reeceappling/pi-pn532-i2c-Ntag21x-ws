@@ -209,9 +209,8 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 	defer cancel()
 
 	resultChan := make(chan ReceivedMsg, 1)
-	defer close(resultChan) // TODO: or in gofunc?
 	go func() {
-		//defer close(resultChan) // TODO: or in gofunc?
+		defer close(resultChan)                                // TODO: or in gofunc?
 		println("attempting to read message in TryGetMessage") // TODO: del!
 		msgType, bytes, err := conn.ReadMessage()              // Bytes may include first bytes to define type              // TODO: this will generally be binary or text for non-signup-flow items
 		println("results:", "type:", msgType)

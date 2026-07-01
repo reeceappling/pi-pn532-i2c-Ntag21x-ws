@@ -153,11 +153,17 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 		// TODO: probably no error here?
 		return errors.Join(errors.New("failed to read websocket response on client"), m.Err) // TODO: ok that we will crash on this?
 	}
-	incoming := m.SocketMsgUnsafe()
 	var outgoing = &shared.SocketMessage{}
+	incoming := m.SocketMsgUnsafe()
+
 	switch m.MsgType {
 	case websocket.PingMessage: // For keeping session alive
-		outgoing = client.handleRenewalRequest(incoming)
+		if incoming.Data == nil || len(incoming.Data) == 0 {
+			outgoing = shared.NewErrorResponse(errors.New("received no bytes on initial request data"))
+		} else {
+			outgoing = client.handleRenewalRequest(incoming)
+		}
+
 	case websocket.TextMessage: // TODO: read???
 		outgoing = shared.NewErrorResponse(errors.New("reader got an error (text) message from server, should never happen: " + string(m.Bytes)))
 	case websocket.BinaryMessage:
@@ -170,8 +176,10 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 			break
 		}
 		firstByte := m.Bytes[0]
+		println("got a binary first message...") // TODO: del
 		switch firstByte {
 		case shared.FirstByteRead:
+			println("got a read request...") // TODO: del
 			outgoing = client.handleReadRequest(incoming)
 		case shared.FirstByteWrite:
 			outgoing = client.handleWriteRequest(incoming)
@@ -193,18 +201,24 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	if err != nil {
 		println("write output failed for reason: " + err.Error()) // TODO: ok to not crash on this?
 	}
+	println("sent response!") // TODO: del
 	return nil
 }
 
 func (client Client) handleReadRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
+	println("validating read request...") // TODO: del
 	err := m.ValidateReadRequest()
 	if err != nil {
+		println("bad read req... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(err)
 	}
+	println("using reader...") // TODO: del
 	tempResp, err := readUserData()
 	if err != nil {
+		println("bad read... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(err)
 	}
+	println("sending result:..." + string(tempResp[:])) // TODO: del
 	return shared.NewReadResponse(tempResp)
 }
 func (client Client) handleRenewalRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
