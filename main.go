@@ -202,7 +202,7 @@ func readUserData() (out [8]byte, err error) {
 		return out, errors.Join(errors.New("failed to get tags"), err)
 	}
 	if len(tags) != 1 {
-		return out, fmt.Errorf("expected 1 tags, got %d", len(tags))
+		return out, fmt.Errorf("expected 1 tag, got %d", len(tags))
 	}
 	tag := tags[0]
 	if err = tag.Connect(); err != nil {
