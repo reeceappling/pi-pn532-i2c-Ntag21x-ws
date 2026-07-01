@@ -24,6 +24,32 @@ type SocketMessage struct {
 	Data []byte `json:"data,omitempty"`
 }
 
+func (sockMsg *SocketMessage) ValidateReadRequest() error {
+	if sockMsg.Type != ReadRequestType {
+		return errors.New("invalid type on read request")
+	}
+	if len(sockMsg.Data) != 1 {
+		return errors.New("read request must contain only 1 byte")
+	}
+	if sockMsg.Data[0] != FirstByteRead {
+		return errors.New("incorrect first byte on read request")
+	}
+	return nil
+}
+func (sockMsg *SocketMessage) ValidateWriteRequest() ([RfidByteSize]byte, error) {
+	if sockMsg.Type != WriteRequestType {
+		return [RfidByteSize]byte{}, errors.New("invalid type on write request")
+	}
+	if len(sockMsg.Data) != 1+RfidByteSize {
+		return [RfidByteSize]byte{}, errors.New("invalidly sized write request")
+	}
+	if sockMsg.Data[0] != WriteRequestType {
+		return [RfidByteSize]byte{}, errors.New("incorrect first byte on write request")
+	}
+	result := [RfidByteSize]byte(sockMsg.Data[1:]) // TODO: ensure works
+	return result, nil
+}
+
 func (sockMsg *SocketMessage) WithData(data []byte) *SocketMessage {
 	sockMsg.Data = data
 	return sockMsg
@@ -41,10 +67,8 @@ func (sockMsg *SocketMessage) WriteTo(c *websocket.Conn) error {
 }
 
 const (
-	FirstByteSignup uint8 = iota
-	FirstByteRead
+	FirstByteRead uint8 = iota
 	FirstByteWrite
-	FirstByteRenew
 )
 
 type SignupRequest struct {
@@ -58,32 +82,38 @@ func NewErrorResponse(err error) *SocketMessage {
 		Data: []byte(err.Error()),
 	}
 }
+
+const ReadRequestType = websocket.BinaryMessage
+const ReadResponseType = websocket.BinaryMessage
+const WriteRequestType = websocket.BinaryMessage
+const WriteResponseType = websocket.BinaryMessage
+
 func NewReadRequest() *SocketMessage {
 	return &SocketMessage{
-		Type: websocket.BinaryMessage,
+		Type: ReadRequestType,
 		Data: []byte{FirstByteRead},
 	}
 }
 func NewReadResponse(r [RfidByteSize]byte) *SocketMessage {
-	bs := make([]byte, 0, RfidByteSize+1)
-	//bs = append(bs, FirstByteRead) // TODO: responses do not need proper first bytes???
-	bs = append(bs, r[:]...)
 	return &SocketMessage{
-		Type: websocket.BinaryMessage,
-		Data: bs,
+		Type: ReadResponseType,
+		Data: r[:],
 	}
 }
-func NewWriteRequest(w [RfidByteSize]byte) *SocketMessage { // TODO: req/res are the same for this one
+func NewWriteRequest(w [RfidByteSize]byte) *SocketMessage {
 	bs := make([]byte, 0, RfidByteSize+1)
 	bs = append(bs, FirstByteWrite)
 	bs = append(bs, w[:]...)
 	return &SocketMessage{
-		Type: websocket.BinaryMessage, // TODO: or should this be messageTypeSignup?
+		Type: WriteRequestType,
 		Data: bs,
 	}
 }
-func NewWriteResponse(w [RfidByteSize]byte) *SocketMessage { // TODO: req/res are the same for this one
-	return NewWriteRequest(w)
+func NewWriteResponse(w [RfidByteSize]byte) *SocketMessage {
+	return &SocketMessage{
+		Type: WriteResponseType,
+		Data: w[:],
+	}
 }
 
 type SignupResponse struct {
@@ -141,33 +171,34 @@ func NewSignupResponse(clientName RfidReaderName) *SocketMessage {
 func NewRenewalRequest(readerName string) *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.PingMessage, // TODO: is this ok?
-		Data: append([]byte{FirstByteRenew}, []byte(readerName)...),
+		Data: []byte(readerName),
 	}
 }
 func NewRenewalResponse(secret string) *SocketMessage {
 	return &SocketMessage{
 		Type: websocket.PongMessage,
-		Data: append([]byte{FirstByteRenew}, []byte(secret)...),
+		Data: []byte(secret),
 	}
-}
-func (res ReceivedMsg) ValidateRenewalRequest(expName string) error {
-	return res.genericValidate(websocket.PingMessage, FirstByteRenew, expName, "renewal request")
 }
 
-func (res ReceivedMsg) ValidateRenewalResponse(expSecret string) error {
-	return res.genericValidate(websocket.PongMessage, FirstByteRenew, expSecret, "renewal response")
-}
+//func (res ReceivedMsg) ValidateRenewalRequest(expName string) error {
+//	return res.genericValidate(websocket.PingMessage, FirstByteRenew, expName, "renewal request")
+//}
 
-func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr string, what string) error {
-	resp, err := res.GetRequestData(expMsgType, expFirstByte)
-	if err != nil {
-		return err
-	}
-	if string(resp) != exStr {
-		return fmt.Errorf(`received incorrect secret on %s`, what)
-	}
-	return nil
-}
+//func (res ReceivedMsg) ValidateRenewalResponse(expSecret string) error {
+//	return res.genericValidate(websocket.PongMessage, FirstByteRenew, expSecret, "renewal response")
+//}
+
+//func (res ReceivedMsg) genericValidate(expMsgType int, expFirstByte uint8, exStr string, what string) error {
+//	resp, err := res.GetRequestData(expMsgType, expFirstByte)
+//	if err != nil {
+//		return err
+//	}
+//	if string(resp) != exStr {
+//		return fmt.Errorf(`received incorrect secret on %s`, what)
+//	}
+//	return nil
+//}
 
 func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Duration) ReceivedMsg {
 	timeoutActual := 30 * time.Second // TODO: default ok?
@@ -224,6 +255,27 @@ func (res ReceivedMsg) AsSignupResponse(expName string) (out *SignupResponse, er
 
 	return &SignupResponse{ClientName: name}, nil
 }
+func (res ReceivedMsg) SocketMsg() (out *SocketMessage, err error) { // TODO: USE!
+	if res.MsgType == MessageTypeError {
+		if res.Err != nil {
+			return nil, errors.Join(errors.New("Error found on incoming message"), res.Err)
+		}
+		return nil, errors.New("Erroneous message without error attached")
+	}
+	if res.Err != nil {
+		return nil, errors.Join(errors.New("Error on signup response without appropriate message type"), res.Err)
+	}
+	return &SocketMessage{
+		Type: res.MsgType,
+		Data: res.Bytes,
+	}, nil
+}
+func (res ReceivedMsg) SocketMsgUnsafe() (out *SocketMessage) { // TODO: USE!
+	return &SocketMessage{
+		Type: res.MsgType,
+		Data: res.Bytes,
+	}
+}
 func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TODO: USE!
 	if res.Err != nil {
 		return nil, errors.Join(errors.New("error on signup response"), res.Err)
@@ -244,8 +296,7 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 			println("reqBytes " + string(res.Bytes)) // TODO: del
 		}
 	}
-	msg := &SocketMessage{res.MsgType, res.Bytes}
-	out, err = msg.ParseSignupRequest()
+	out, err = res.SocketMsgUnsafe().ParseSignupRequest()
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to unmarshal signup request received"), err)
 	}
@@ -253,21 +304,21 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 }
 
 const RfidByteSize = 8 // TODO: is this correct?? must match RfidByteSize in mdb.go
-func (res ReceivedMsg) ValidateWriteRequest() (toWrite [RfidByteSize]byte, err error) {
-	if res.Err != nil {
-		return [RfidByteSize]byte{}, res.Err
-	}
-	req, err := res.GetRequestData(websocket.BinaryMessage, FirstByteWrite)
-	if err != nil {
-		return [RfidByteSize]byte{}, err
-	}
-	if len(req) != RfidByteSize {
-		return [RfidByteSize]byte{}, errors.New("invalid write request size")
-	}
-	return [RfidByteSize]byte(req), nil
-}
+//func (res ReceivedMsg) ValidateWriteRequest() (toWrite [RfidByteSize]byte, err error) {
+//	if res.Err != nil {
+//		return [RfidByteSize]byte{}, res.Err
+//	}
+//	req, err := res.GetRequestData(websocket.BinaryMessage, FirstByteWrite)
+//	if err != nil {
+//		return [RfidByteSize]byte{}, err
+//	}
+//	if len(req) != RfidByteSize {
+//		return [RfidByteSize]byte{}, errors.New("invalid write request size")
+//	}
+//	return [RfidByteSize]byte(req), nil
+//}
 
-func (res ReceivedMsg) ValidateWriteResponse(expectedWritten [RfidByteSize]byte) error {
+func (res ReceivedMsg) ProcessWriteResponse(expectedWritten [RfidByteSize]byte) error {
 	if res.Err != nil {
 		return errors.New("error on write response: " + res.Err.Error())
 	}
@@ -297,11 +348,6 @@ func (res ReceivedMsg) ValidateWriteResponse(expectedWritten [RfidByteSize]byte)
 	//return nil
 }
 
-func (res *ReceivedMsg) ValidateReadRequest() error {
-	_, err := res.GetRequestData(websocket.BinaryMessage, FirstByteRead)
-	return err
-}
-
 func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err error) {
 	if res.Err != nil {
 		return [RfidByteSize]byte{}, errors.New("error on read response: " + res.Err.Error())
@@ -309,7 +355,7 @@ func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err 
 	if len(res.Bytes) != RfidByteSize {
 		return [RfidByteSize]byte{}, errors.New("invalid read response size")
 	}
-	if res.MsgType != websocket.BinaryMessage {
+	if res.MsgType != ReadResponseType {
 		return [RfidByteSize]byte{}, errors.New("invalid read response type")
 	}
 	//resp, err := res.GetRequestData(websocket.BinaryMessage, FirstByteRead)
@@ -320,37 +366,37 @@ func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err 
 	return [RfidByteSize]byte(res.Bytes), nil
 }
 
-func (res ReceivedMsg) GetRequestData(expMsgType int, expFirstByte byte) (resultWithTypeByte []byte, err error) {
-	resultWithTypeByte = nil
-	msgType, msgBytes := res.MsgType, res.Bytes
-	if res.Err != nil {
-		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
-		println("res.Err != nil", err.Error()) // TODO: del
-		return
-	}
-	// validate response is as expected
-	resp := &SocketMessage{}
-	if err = json.Unmarshal(msgBytes, resp); err != nil {
-		println("got a non-socketMessage: " + err.Error())
-		return
-	}
-	if msgType == websocket.TextMessage {
-		err = errors.New(string(resp.Data))
-		println("errMsg", string(resp.Data))
-		return
-	}
-	if msgType != expMsgType {
-		err = errors.New("unexpected message format for response")
-		println("unexpected message format for response", msgType, "expected", expMsgType)
-		return
-	}
-	if resp.Data[0] != expFirstByte {
-		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
-		println(err.Error()) // TODO: del
-		return
-	}
-	if len(resp.Data) == 1 { // TODO: will it ever be 0?
-		return nil, nil // TODO: ok?
-	}
-	return resp.Data[1:], nil
-}
+//func (res ReceivedMsg) GetRequestData(expMsgType int, expFirstByte byte) (resultWithTypeByte []byte, err error) {
+//	resultWithTypeByte = nil
+//	msgType, msgBytes := res.MsgType, res.Bytes
+//	if res.Err != nil {
+//		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
+//		println("res.Err != nil", err.Error()) // TODO: del
+//		return
+//	}
+//	resp, err := res.SocketMsg()
+//	if err != nil {
+//		println("got a non-socketMessage: " + err.Error())
+//		return nil, err
+//	}
+//	// validate response is as expected
+//	if msgType == websocket.TextMessage {
+//		err = errors.New(string(resp.Data))
+//		println("errMsg", string(resp.Data))
+//		return
+//	}
+//	if msgType != expMsgType {
+//		err = errors.New("unexpected message format for response")
+//		println("unexpected message format for response", msgType, "expected", expMsgType)
+//		return
+//	}
+//	if resp.Data[0] != expFirstByte {
+//		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
+//		println(err.Error()) // TODO: del
+//		return
+//	}
+//	if len(resp.Data) == 1 { // TODO: will it ever be 0?
+//		return nil, nil // TODO: ok?
+//	}
+//	return resp.Data[1:], nil
+//}

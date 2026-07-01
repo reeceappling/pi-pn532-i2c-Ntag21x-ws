@@ -341,7 +341,7 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 	//	return // TODO: ok?
 	//}
 
-	println("Adding session for rfid scanner")
+	println("Adding session for rfid scanner: " + req.Name)
 	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
 	err = mgr.Add(ctx, newSession, req)
 	if err != nil {

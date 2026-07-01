@@ -153,11 +153,12 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 		// TODO: probably no error here?
 		return errors.Join(errors.New("failed to read websocket response on client"), m.Err) // TODO: ok that we will crash on this?
 	}
+	incoming := m.SocketMsgUnsafe()
 	var outgoing = &shared.SocketMessage{}
 	switch m.MsgType {
 	case websocket.PingMessage: // For keeping session alive
-		outgoing = client.handleRenewalRequest(m)
-	case websocket.TextMessage:
+		outgoing = client.handleRenewalRequest(incoming)
+	case websocket.TextMessage: // TODO: read???
 		outgoing = shared.NewErrorResponse(errors.New("reader got an error (text) message from server, should never happen: " + string(m.Bytes)))
 	case websocket.BinaryMessage:
 		if m.Bytes == nil {
@@ -168,15 +169,15 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 			outgoing = shared.NewErrorResponse(errors.New("reader/writer got an empty binary message, should never happen"))
 			break
 		}
-		switch m.Bytes[0] {
+		firstByte := m.Bytes[0]
+		switch firstByte {
 		case shared.FirstByteRead:
-			outgoing = client.handleReadRequest(m)
+			outgoing = client.handleReadRequest(incoming)
 		case shared.FirstByteWrite:
-			outgoing = client.handleWriteRequest(m)
+			outgoing = client.handleWriteRequest(incoming)
 		default:
 			outgoing = shared.NewErrorResponse(fmt.Errorf("invalid binary message first byte %d", m.Bytes[0]))
 		}
-
 	case websocket.CloseMessage: // For closing client
 		// TODO: close the websocket/restart!
 		return errors.New("closing websocket gracefully")
@@ -195,7 +196,7 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	return nil
 }
 
-func (client Client) handleReadRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
+func (client Client) handleReadRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
 	err := m.ValidateReadRequest()
 	if err != nil {
 		return shared.NewErrorResponse(err)
@@ -206,14 +207,16 @@ func (client Client) handleReadRequest(m shared.ReceivedMsg) (response *shared.S
 	}
 	return shared.NewReadResponse(tempResp)
 }
-func (client Client) handleRenewalRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
-	err := m.ValidateRenewalRequest(client.name)
-	if err != nil {
-		return shared.NewErrorResponse(err)
+func (client Client) handleRenewalRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
+	if len(m.Data) == 0 {
+		return shared.NewErrorResponse(errors.New("data provided too small on renewal request"))
+	}
+	if client.name != string(m.Data) {
+		return shared.NewErrorResponse(errors.New("renewal name mismatch"))
 	}
 	return shared.NewRenewalResponse(client.serviceSecret)
 }
-func (client Client) handleWriteRequest(m shared.ReceivedMsg) (response *shared.SocketMessage) {
+func (client Client) handleWriteRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
 	toWrite, err := m.ValidateWriteRequest()
 	if err != nil {
 		return shared.NewErrorResponse(err)

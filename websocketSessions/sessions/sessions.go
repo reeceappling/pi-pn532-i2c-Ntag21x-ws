@@ -76,11 +76,23 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 		return errors.Join(errors.New("failed to send renewal message"), err)
 	}
 	// READ for a pong message (within the allowed timeframe)
-	err = s.TryGetMessage(context.Background(), 5*time.Second). // TODO: time ok?
-									ValidateRenewalResponse(expSecret)
-	if err != nil {
+	msg := s.TryGetMessage(context.Background(), 5*time.Second)
+	if msg.Err != nil {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("failed to renew client lease"), err)
+		return errors.New("bad renewal response") // TODO: ok?
+	}
+	if msg.MsgType != websocket.PongMessage {
+		s.processRenewalFailure()
+		return errors.New("bad renewal response type") // TODO: ok?
+	}
+	sm := msg.SocketMsgUnsafe()
+	if len(sm.Data) == 0 {
+		s.processRenewalFailure()
+		return errors.New("response too small") // TODO: ok?
+	}
+	if string(sm.Data) != expSecret {
+		s.processRenewalFailure()
+		return errors.Join(errors.New("failed to renew client lease, secret mismatch"), err)
 	}
 	s.processSuccessfulRenewal()
 	return nil
@@ -102,21 +114,23 @@ const writeResponseTimeout = 5 * time.Second // TODO: time ok?
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
 	defer sess.Unlock()
-	err := shared.NewReadRequest().WriteTo(sess.Conn)
+	err := shared.NewReadRequest().
+		WriteTo(sess.Conn)
 	if err != nil {
 		return [shared.RfidByteSize]byte{}, err
 	}
-	return sess.TryGetMessage(ctx, writeResponseTimeout).
+	return sess.TryGetMessage(ctx, readResponseTimeout).
 		ProcessReadResponse()
 }
 
 func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error { // TODO: this is serverside
 	sess.Lock()
 	defer sess.Unlock()
-	err := shared.NewWriteRequest(toWrite).WriteTo(sess.Conn)
+	err := shared.NewWriteRequest(toWrite).
+		WriteTo(sess.Conn)
 	if err != nil {
 		return err
 	}
-	return sess.TryGetMessage(ctx, readResponseTimeout).
-		ValidateWriteResponse(toWrite)
+	return sess.TryGetMessage(ctx, writeResponseTimeout).
+		ProcessWriteResponse(toWrite)
 }
