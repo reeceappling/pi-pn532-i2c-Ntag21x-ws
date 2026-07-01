@@ -76,7 +76,7 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 		return errors.Join(errors.New("failed to send renewal message"), err)
 	}
 	// READ for a pong message (within the allowed timeframe)
-	msg := s.TryGetMessage(context.Background(), 5*time.Second)
+	msg := s.TryGetMessage(context.Background(), 12*time.Second)
 	if msg.Err != nil {
 		s.processRenewalFailure()
 		return errors.New("bad renewal response") // TODO: ok?
@@ -105,7 +105,11 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration) shared.ReceivedMsg {
 	timedCtx, cancel := context.WithTimeout(ctx, sess.requestTimeout)
 	defer cancel()
-	return shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
+	m := shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
+	if m.Err != nil {
+		println("g0t erroneous message. Returning it anyways!")
+	}
+	return m
 }
 
 const readResponseTimeout = 20 * time.Second  // TODO: time ok?
