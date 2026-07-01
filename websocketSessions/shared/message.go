@@ -33,11 +33,7 @@ func (sockMsg *SocketMessage) WithType(msgType int) *SocketMessage {
 	return sockMsg
 }
 func (sockMsg *SocketMessage) WriteTo(c *websocket.Conn) error {
-	respBytes, err := json.Marshal(*sockMsg) // Error should be impossible here
-	if err != nil {
-		return errors.Join(errors.New("failed to marshal socket message to Bytes"), err)
-	}
-	err = c.WriteMessage(websocket.BinaryMessage, respBytes)
+	err := c.WriteMessage(sockMsg.Type, sockMsg.Data)
 	if err != nil {
 		return errors.Join(errors.New("failed to write socket message to connection"), err)
 	}
@@ -248,11 +244,7 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 			println("reqBytes " + string(res.Bytes)) // TODO: del
 		}
 	}
-	msg := &SocketMessage{}
-	err = json.Unmarshal(res.Bytes, msg)
-	if err != nil {
-		return nil, errors.Join(errors.New("failed to unmarshal signup socket message received"), err)
-	}
+	msg := &SocketMessage{res.MsgType, res.Bytes}
 	out, err = msg.ParseSignupRequest()
 	if err != nil {
 		return nil, errors.Join(errors.New("failed to unmarshal signup request received"), err)
