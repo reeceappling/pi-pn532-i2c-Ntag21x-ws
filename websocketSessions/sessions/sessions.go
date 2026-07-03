@@ -26,18 +26,21 @@ type Session struct { // TODO: reevaluate
 const defaultRequestTimeout = 30 * time.Second
 const defaultSessionTimeout = 5 * time.Minute
 const defaultMaxSessionCheckFailures = 1
+const cloudflareTunnelWebsocketTimeout = 100 * time.Second
+const reasonableCloudflareTunnelWebsocketKeepalive = 90 * time.Second
 
 func New(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Duration, timeBtwnChecks *time.Duration, maxCheckFailures *int) *Session { // TODO: before destroying session, lock
 	sessionTimeout := utils.Default(sessionTTL, defaultSessionTimeout)
 	timeout := utils.Default(reqTimeout, defaultRequestTimeout)
 	maxRefreshFails := utils.Default(maxCheckFailures, defaultMaxSessionCheckFailures)
+	mut := &sync.Mutex{}
 	return &Session{
 		Conn:             conn,
 		ttl:              sessionTimeout,
 		maxCheckFailures: maxRefreshFails,
 		Expires:          time.Now().Add(timeout),
 		requestTimeout:   timeout,
-		Mutex:            &sync.Mutex{},
+		Mutex:            mut,
 		Close: func() {
 			err := conn.Close()
 			if err != nil {

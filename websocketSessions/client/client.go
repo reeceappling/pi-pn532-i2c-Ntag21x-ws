@@ -91,6 +91,7 @@ func (client Client) signUp(ctx context.Context) (err error) {
 		println(errr.Error()) // TODO: del
 		return errr
 	}
+	//client.conn.SetPongHandler(func(string) error {})
 	return nil
 }
 func (client Client) sendSignupRequest() (err error) {
@@ -130,11 +131,10 @@ func (client Client) connectAndListen(ctx context.Context, receive chan shared.R
 		println("failed signup: " + err.Error())
 		return err
 	}
-	go func() {
-		for {
-
-		}
-	}()
+	// Needed so no autoPong
+	client.conn.SetPingHandler(func(string) error {
+		return nil
+	})
 	// TODO: ensure we won't get colliding messages (handled manager-side)
 	// Start listening for real messages
 	println("listening for read and write commands") // TODO: del
@@ -170,15 +170,21 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	var outgoing = &shared.SocketMessage{}
 	incoming := m.SocketMsgUnsafe()
 
+	// TODO: set read and write deadlines, pingHandler
+
 	switch m.MsgType {
 	case websocket.PingMessage: // For keeping session alive
 		if incoming.Data == nil || len(incoming.Data) == 0 {
 			outgoing = shared.NewErrorResponse(errors.New("received no bytes on initial request data"))
 		} else {
 			outgoing = client.handleRenewalRequest(incoming)
+			//err = client.conn.WriteControl(websocket.PongMessage, []byte(client.serviceSecret), time.Now().Add(10*time.Second)) // TODO: move
+			//if err != nil {
+			//	// TODO: handle the error!
+			//}
 		}
 
-	case websocket.TextMessage: // TODO: read???
+	case websocket.TextMessage:
 		outgoing = shared.NewErrorResponse(errors.New("reader got an error (text) message from server, should never happen: " + string(m.Bytes)))
 	case websocket.BinaryMessage:
 		if m.Bytes == nil {
@@ -242,7 +248,7 @@ func (client Client) handleRenewalRequest(m *shared.SocketMessage) (response *sh
 	if client.name != string(m.Data) {
 		return shared.NewErrorResponse(errors.New("renewal name mismatch"))
 	}
-	return shared.NewRenewalResponse(client.serviceSecret)
+	return shared.NewRenewalResponse(client.serviceSecret) // TODO: conn.WriteControl instead?
 }
 func (client Client) handleWriteRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
 	toWrite, err := m.ValidateWriteRequest()

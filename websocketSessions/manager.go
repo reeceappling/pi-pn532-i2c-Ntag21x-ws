@@ -45,6 +45,9 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 		RWMutex:  &sync.RWMutex{},
 	}
 
+	// Heartbeat thread // TODO: ensure ok!
+	heartbeatTicker := time.NewTicker(90 * time.Second)
+	// TODO: get rid of the cleanup ticker? this should cover it
 	go func() {
 		defer func() {
 			mgr.cleanup.Stop()
@@ -62,41 +65,74 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 			println("finished cleaning up session manager")
 			// TODO: ensure anything waiting for locks (like Add) will not work anymore after this
 		}()
-		for {
-			select {
-			case <-mgr.cleanup.C: // TODO: rename so we know this tries to renew as well as cleanup
-				mgr.cleanup.Stop()
-				mgr.RLock()
-
-				wgStarted := &sync.WaitGroup{}
-				wgEnded := &sync.WaitGroup{}
-				wgStarted.Add(len(mgr.sessions))
-				wgEnded.Add(len(mgr.sessions))
-				for name, session := range mgr.sessions {
-					go func() {
-						wgStarted.Done()
-						defer wgEnded.Done()
-						now := time.Now()
-						if session.Expires.Before(now) { // TODO: rework this to grab a full lock, figure out everything that needs changes (spread out on a channel), then do all the changes at once, then release the lock, to ensure no lock contention
-							// TODO: pretty sure the map lock and the session-level lock will have issues here
-							errr := session.TryRenew(string(name), mgr.secret) // TODO: ensure this is ok
-							if errr != nil {
-								println(errr.Error()) // TODO: ok?
-							}
-						}
-					}()
-				}
-				wgStarted.Wait()
-				mgr.RUnlock()
-				wgEnded.Wait()
-				mgr.cleanup.Reset(freq)
-			case _, ok := <-mgr.done:
-				if !ok {
-					return
-				}
+		for _ = range heartbeatTicker.C {
+			mgr.RLock()
+			for name, session := range mgr.sessions {
+				go func() {
+					e := session.TryRenew(string(name), secret) // TODO: unsure if sessions will start stacking errors here...
+					if e != nil {
+						println("session renew error for client name: " + name)
+						session.Close()
+					}
+				}()
 			}
+			mgr.RUnlock()
 		}
 	}()
+
+	//go func() {
+	//	defer func() {
+	//		mgr.cleanup.Stop()
+	//		mgr.Lock()
+	//		wg := &sync.WaitGroup{}
+	//		wg.Add(len(mgr.sessions))
+	//		for _, session := range mgr.sessions {
+	//			go func() {
+	//				session.Close()
+	//				wg.Done()
+	//			}()
+	//		}
+	//		mgr.Unlock()
+	//		wg.Wait()
+	//		println("finished cleaning up session manager")
+	//		// TODO: ensure anything waiting for locks (like Add) will not work anymore after this
+	//	}()
+	//	for {
+	//		select {
+	//		// TODO: ping clients every 45 seconds?
+	//		case <-mgr.cleanup.C: // TODO: rename so we know this tries to renew as well as cleanup
+	//			mgr.cleanup.Stop()
+	//			mgr.RLock()
+	//
+	//			wgStarted := &sync.WaitGroup{}
+	//			wgEnded := &sync.WaitGroup{}
+	//			wgStarted.Add(len(mgr.sessions))
+	//			wgEnded.Add(len(mgr.sessions))
+	//			for name, session := range mgr.sessions {
+	//				go func() {
+	//					wgStarted.Done()
+	//					defer wgEnded.Done()
+	//					now := time.Now()
+	//					if session.Expires.Before(now) { // TODO: rework this to grab a full lock, figure out everything that needs changes (spread out on a channel), then do all the changes at once, then release the lock, to ensure no lock contention
+	//						// TODO: pretty sure the map lock and the session-level lock will have issues here
+	//						errr := session.TryRenew(string(name), mgr.secret) // TODO: ensure this is ok
+	//						if errr != nil {
+	//							println(errr.Error()) // TODO: ok?
+	//						}
+	//					}
+	//				}()
+	//			}
+	//			wgStarted.Wait()
+	//			mgr.RUnlock()
+	//			wgEnded.Wait()
+	//			mgr.cleanup.Reset(freq)
+	//		case _, ok := <-mgr.done:
+	//			if !ok {
+	//				return
+	//			}
+	//		}
+	//	}
+	//}()
 	return mgr
 }
 
@@ -246,6 +282,7 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 	mgr.Lock()
 	defer mgr.Unlock()
 	if existingSession, exists := mgr.sessions[req.Name]; exists {
+		// TODO: close instead? this could cause 2 sessions with the same name to start re-opening sessions on repeat and closing each other out...
 		err = existingSession.TryRenew(string(req.Name), mgr.secret)
 		existingSession.Close() // TODO: ok?
 		// TODO: s.Close()?
