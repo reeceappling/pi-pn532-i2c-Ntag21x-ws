@@ -34,6 +34,9 @@ func New(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Durat
 	timeout := utils.Default(reqTimeout, defaultRequestTimeout)
 	maxRefreshFails := utils.Default(maxCheckFailures, defaultMaxSessionCheckFailures)
 	mut := &sync.Mutex{}
+	conn.SetPongHandler(func(appData string) error { // TODO: ENSURE OK!
+		return nil
+	})
 	return &Session{
 		Conn:             conn,
 		ttl:              sessionTimeout,
@@ -82,7 +85,7 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 	msg := s.TryGetMessage(context.Background(), 12*time.Second)
 	if msg.Err != nil {
 		s.processRenewalFailure()
-		return errors.New("bad renewal response") // TODO: ok?
+		return errors.Join(errors.New("bad renewal response"), msg.Err) // TODO: ok?
 	}
 	if msg.MsgType != websocket.PongMessage {
 		s.processRenewalFailure()
@@ -129,8 +132,11 @@ func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte
 		return [shared.RfidByteSize]byte{}, err
 	}
 	println("trying to get response") // TODO: del
-	return sess.TryGetMessage(ctx, readResponseTimeout).
-		ProcessReadResponse()
+	result, err := sess.TryGetMessage(ctx, readResponseTimeout).ProcessReadResponse()
+	if err != nil {
+		println("error processing read response: " + err.Error())
+	}
+	return result, err
 }
 
 func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error { // TODO: this is serverside
@@ -139,8 +145,12 @@ func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteS
 	err := shared.NewWriteRequest(toWrite).
 		WriteTo(sess.Conn)
 	if err != nil {
+		println("error writing write request: " + err.Error())
 		return err
 	}
-	return sess.TryGetMessage(ctx, writeResponseTimeout).
-		ProcessWriteResponse(toWrite)
+	err = sess.TryGetMessage(ctx, writeResponseTimeout).ProcessWriteResponse(toWrite)
+	if err != nil {
+		println("error processing read response: " + err.Error())
+	}
+	return err
 }
