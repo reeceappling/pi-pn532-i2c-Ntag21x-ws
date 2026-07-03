@@ -224,13 +224,13 @@ func (client Client) handleReadRequest(m *shared.SocketMessage) (response *share
 	err := m.ValidateReadRequest()
 	if err != nil {
 		println("bad read req... " + err.Error()) // TODO: del
-		return shared.NewErrorResponse(err)
+		return shared.NewErrorResponse(errors.Join(errors.New("bad read request"), err))
 	}
 	println("using reader...") // TODO: del
 	tempResp, err := readUserData()
 	if err != nil {
 		println("bad read... " + err.Error()) // TODO: del
-		return shared.NewErrorResponse(err)
+		return shared.NewErrorResponse(errors.Join(errors.New("failed read in i2c"), err))
 	}
 	println("sending result:..." + string(tempResp[:])) // TODO: del
 	return shared.NewReadResponse(tempResp)
@@ -275,7 +275,7 @@ func readUserData() (out [shared.RfidByteSize]byte, err error) {
 		return out, errors.Join(errors.New("failed to get tags"), err)
 	}
 	if len(tags) != 1 {
-		return out, fmt.Errorf("expected 1 tags, got %d", len(tags))
+		return out, fmt.Errorf("expected 1 tag, got %d", len(tags))
 	}
 	tag := tags[0]
 	if err = tag.Connect(); err != nil {
@@ -298,7 +298,7 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 		return errors.Join(errors.New("failed to get tags"), err)
 	}
 	if len(tags) != 1 {
-		return fmt.Errorf("expected 1 tags, got %d", len(tags))
+		return fmt.Errorf("expected 1 tag, got %d", len(tags))
 	}
 	tag := tags[0]
 	if err = tag.Connect(); err != nil {
@@ -326,7 +326,6 @@ func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byt
 }
 
 func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteSize]byte) error {
-	// TODO: PROBABLY OVERHAUL!
 	initialUID, err := readUserDataInternal(ntag) // TODO: probably dont need
 	if err != nil {
 		log.Fatal(err.Error())
