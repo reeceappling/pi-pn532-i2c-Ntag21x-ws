@@ -268,14 +268,19 @@ func OpenDevice() (nfc.Device, error) {
 	return device, nil
 }
 
+const (
+	maxReadWriteTries = 10                     // TODO: ok?
+	maxReadTries      = maxReadWriteTries      // TODO: ok?
+	maxWriteTries     = maxReadWriteTries      // TODO: ok?
+	retryWaitTime     = 200 * time.Millisecond // TODO: ok?
+)
+
 func readUserData() (out [shared.RfidByteSize]byte, err error) {
 	device, err := OpenDevice()
 	if err != nil {
 		return out, err
 	}
 	defer device.Close()
-	const maxReadTries = 20                      // TODO: ok?
-	const retryWaitTime = 100 * time.Millisecond // TODO: ok?
 	var tags []freefare.Tag
 	for i := 0; i < maxReadTries; i++ {
 		tags, err = freefare.GetTags(device)
@@ -316,8 +321,6 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 		return err
 	}
 	defer device.Close()
-	const maxWriteTries = 20                     // TODO: ok?
-	const retryWaitTime = 100 * time.Millisecond // TODO: ok?
 	var tags []freefare.Tag
 	for i := 0; i < maxWriteTries; i++ {
 		tags, err = freefare.GetTags(device)
