@@ -91,12 +91,12 @@ func (client Client) signUp(ctx context.Context) (err error) {
 		println(errr.Error()) // TODO: del
 		return errr
 	}
-	//client.conn.SetPongHandler(func(string) error {})
+	println("Signed up")
+	//client.conn.SetPongHandler(func(string) error {}) // TODO: ???
 	return nil
 }
 func (client Client) sendSignupRequest() (err error) {
 	sur := shared.NewSignupRequest(client.name, client.serviceSecret)
-	println("created signup request")
 	err = sur.WriteTo(client.conn)
 	if err != nil {
 		println("failed to send signup request")
@@ -105,11 +105,9 @@ func (client Client) sendSignupRequest() (err error) {
 	return nil
 }
 func (client Client) parseAndValidateSignupResponse(ctx context.Context) (err error) {
-	println("trying to get response") // TODO: del
 	// Get and validate signup response
 	received := shared.TryGetMessage(ctx, client.conn, 35*time.Second) // TODO: time ok?
-	println("got signup response, validating")
-	resp, err := received.AsSignupResponse(client.name) // TODO: flip to client.ValidateSignupResponse(m) and remove resp.Validate(client.name)
+	resp, err := received.AsSignupResponse(client.name)                // TODO: flip to client.ValidateSignupResponse(m) and remove resp.Validate(client.name)
 	if err != nil {
 		println("failed to parse or invalid response message as signup response: " + err.Error())
 		return err
@@ -160,11 +158,12 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	err := m.Err
 	if err != nil {
 		if errors.Is(err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
-			println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
+			//println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
 			return nil
 		}
 		e := errors.Join(errors.New("failed to read websocket response on client"), m.Err)
 		println("possibly fatal error: ", e.Error())
+		time.Sleep(2 * time.Second) // TODO: ok?
 		return nil
 	}
 	var outgoing = &shared.SocketMessage{}
@@ -196,12 +195,13 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 			break
 		}
 		firstByte := m.Bytes[0]
-		println("got a binary first message...") // TODO: del
+		println("got a binary first message... " + incoming.String()) // TODO: del
 		switch firstByte {
 		case shared.FirstByteRead:
-			println("got a read request...") // TODO: del
+			println("got a read request... ") // TODO: del
 			outgoing = client.handleReadRequest(incoming)
 		case shared.FirstByteWrite:
+			println("got a write request... ") // TODO: del
 			outgoing = client.handleWriteRequest(incoming)
 		default:
 			outgoing = shared.NewErrorResponse(fmt.Errorf("invalid binary message first byte %d", m.Bytes[0]))
@@ -221,21 +221,19 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	if err != nil {
 		println("write output failed for reason: " + err.Error()) // TODO: ok to not crash on this?
 	}
-	println("sent response!") // TODO: del
+	println("sent response!" + outgoing.String()) // TODO: del
 	return nil
 }
 
 func (client Client) handleReadRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
-	println("validating read request...") // TODO: del
 	err := m.ValidateReadRequest()
 	if err != nil {
-		println("bad read req... " + err.Error()) // TODO: del
+		println("failed to validate read request... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(errors.Join(errors.New("bad read request"), err))
 	}
-	println("using reader...") // TODO: del
 	tempResp, err := readUserData()
 	if err != nil {
-		println("bad read... " + err.Error()) // TODO: del
+		println("failed to read user data... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(errors.Join(errors.New("failed read in i2c"), err))
 	}
 	println("sending result:..." + string(tempResp[:])) // TODO: del

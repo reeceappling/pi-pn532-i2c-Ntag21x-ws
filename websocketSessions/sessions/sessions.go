@@ -112,9 +112,10 @@ func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration
 	timedCtx, cancel := context.WithTimeout(ctx, sess.requestTimeout)
 	defer cancel()
 	m := shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
-	if m.Err != nil {
-		println("g0t erroneous message. Returning it anyways!")
-	}
+	println("Got message:" + m.String())                       // TODO: del?
+	//if m.Err != nil {
+	//	println("g0t erroneous message. Returning it anyways!")
+	//}
 	return m
 }
 
