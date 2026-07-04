@@ -195,15 +195,17 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 			break
 		}
 		firstByte := m.Bytes[0]
-		println("got a binary first message... " + incoming.String()) // TODO: del
 		switch firstByte {
 		case shared.FirstByteRead:
-			println("got a read request... ") // TODO: del
+			println("got a binary first message... " + incoming.String(shared.ReadRequestType)) // TODO: del
+			println("got a read request... ")                                                   // TODO: del
 			outgoing = client.handleReadRequest(incoming)
 		case shared.FirstByteWrite:
-			println("got a write request... ") // TODO: del
+			println("got a binary first message... " + incoming.String(shared.WriteRequestType)) // TODO: del
+			println("got a write request... ")                                                   // TODO: del
 			outgoing = client.handleWriteRequest(incoming)
 		default:
+			println("got a binary first message... " + incoming.String()) // TODO: del
 			outgoing = shared.NewErrorResponse(fmt.Errorf("invalid binary message first byte %d", m.Bytes[0]))
 		}
 	case websocket.CloseMessage: // For closing client
