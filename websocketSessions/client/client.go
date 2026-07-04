@@ -355,6 +355,7 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 	}
 	err = write(newUID)
 	if err != nil {
+		println("failed to write, reverting")
 		errB := write(initialUID) // TODO: probably get rid of!
 		if errB != nil {
 			err = errors.Join(errors.New("FAILED TO REWRITE ORIGINAL DATA"), err)
@@ -374,5 +375,6 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 	if finalStr != string(newUID[:]) {
 		return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
 	}
+	println("Confirmed that the write succeeded!")
 	return nil
 }

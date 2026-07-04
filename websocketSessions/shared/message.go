@@ -61,7 +61,7 @@ func (sockMsg *SocketMessage) ValidateWriteRequest() ([RfidByteSize]byte, error)
 	if len(sockMsg.Data) != 1+RfidByteSize {
 		return [RfidByteSize]byte{}, errors.New("invalidly sized write request")
 	}
-	if sockMsg.Data[0] != WriteRequestType {
+	if sockMsg.Data[0] != FirstByteWrite {
 		return [RfidByteSize]byte{}, errors.New("incorrect first byte on write request")
 	}
 	result := [RfidByteSize]byte(sockMsg.Data[1:]) // TODO: ensure works
