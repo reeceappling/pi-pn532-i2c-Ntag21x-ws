@@ -155,16 +155,15 @@ func (client Client) connectAndListen(ctx context.Context, receive chan shared.R
 
 func (client Client) listenAndHandleOne(ctx context.Context) error {
 	m := shared.TryGetMessage(ctx, client.conn, 30*time.Second)
-	err := m.Err
-	if err != nil {
-		if errors.Is(err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
+	if m.Err != nil {
+		if errors.Is(m.Err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
 			//println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
 			return nil
 		}
 		e := errors.Join(errors.New("failed to read websocket response on client"), m.Err)
 		println("possibly fatal error: ", e.Error())
-		time.Sleep(2 * time.Second) // TODO: ok?
-		return nil
+		//time.Sleep(2 * time.Second) // TODO: ok?
+		return e
 	}
 	var outgoing = &shared.SocketMessage{}
 	incoming := m.SocketMsgUnsafe()
