@@ -41,9 +41,9 @@ func (sockMsg *SocketMessage) ValidateReadRequest() error {
 func (sockMsg *SocketMessage) String(expectedType ...int) string {
 	b := strings.Builder{}
 	b.Write([]byte(fmt.Sprintf("\nType: %d", sockMsg.Type)))
-	if len(expectedType) != 0 {
-		b.Write([]byte(fmt.Sprintf(". Exp: %d\n", expectedType[0])))
-	}
+	//if len(expectedType) != 0 {
+	//	b.Write([]byte(fmt.Sprintf(". Exp: %d\n", expectedType[0]))) // TODO: del?
+	//}
 	if sockMsg.Data != nil {
 		if len(sockMsg.Data) != 0 {
 			b.Write([]byte(fmt.Sprintf("BytesWithFirst:%s\n", string(sockMsg.Data))))
