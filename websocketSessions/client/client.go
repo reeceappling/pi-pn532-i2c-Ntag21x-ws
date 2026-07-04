@@ -331,7 +331,13 @@ func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byt
 	return UID, nil
 }
 
-func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteSize]byte) error {
+func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteSize]byte, tries ...int) error {
+	//retries := 0 // TODO: implement retries!
+	//if len(tries) != 0 {
+	//	if tries[0]<1{
+	//		return errors.New("tries should be greater than than 1")
+	//	}
+	//}
 	initialUID, err := readUserDataInternal(ntag) // TODO: probably dont need
 	if err != nil {
 		log.Fatal(err.Error())
@@ -349,7 +355,7 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 	}
 	err = write(newUID)
 	if err != nil {
-		errB := write(initialUID)
+		errB := write(initialUID) // TODO: probably get rid of!
 		if errB != nil {
 			err = errors.Join(errors.New("FAILED TO REWRITE ORIGINAL DATA"), err)
 		}
@@ -363,7 +369,7 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 		println("warning: failed to read user data to confirm write")
 		return nil
 	}
-	// Reread to confirm (optional)
+	// Reread to confirm (optional) // TODO: probably get rid of!
 	finalStr := string(finalUID[:])
 	if finalStr != string(newUID[:]) {
 		return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
