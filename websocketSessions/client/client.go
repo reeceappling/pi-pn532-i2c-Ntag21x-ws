@@ -9,7 +9,6 @@ import (
 	"github.com/reeceappling/freefare"
 	"github.com/reeceappling/goUtils/v2/utils"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/shared"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -218,7 +217,7 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 		outgoing = shared.NewErrorResponse(fmt.Errorf(`unsupported websocket messageType %d and contents: %s`, m.MsgType, str))
 	}
 
-	err = outgoing.WriteTo(client.conn)
+	err := outgoing.WriteTo(client.conn)
 	if err != nil {
 		println("write output failed for reason: " + err.Error()) // TODO: ok to not crash on this?
 	}
@@ -275,21 +274,40 @@ func readUserData() (out [shared.RfidByteSize]byte, err error) {
 		return out, err
 	}
 	defer device.Close()
-	tags, err := freefare.GetTags(device)
-	if err != nil {
-		return out, errors.Join(errors.New("failed to get tags"), err)
+	const maxReadTries = 20                      // TODO: ok?
+	const retryWaitTime = 100 * time.Millisecond // TODO: ok?
+	var tags []freefare.Tag
+	for i := 0; i < maxReadTries; i++ {
+		tags, err = freefare.GetTags(device)
+		if err != nil {
+			err = errors.Join(errors.New("failed to get tags"), err)
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		if len(tags) != 1 {
+			err = fmt.Errorf("expected 1 tag, got %d", len(tags))
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		tag := tags[0]
+		if err = tag.Connect(); err != nil {
+			err = errors.Join(errors.New("failed to connect"), err)
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
+			err = ErrWrongTag
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		out, err = readUserDataInternal(tag.(freefare.UltralightTag))
+		if err != nil {
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		return out, err
 	}
-	if len(tags) != 1 {
-		return out, fmt.Errorf("expected 1 tag, got %d", len(tags))
-	}
-	tag := tags[0]
-	if err = tag.Connect(); err != nil {
-		return out, errors.Join(errors.New("failed to connect"), err)
-	}
-	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return out, ErrWrongTag
-	}
-	return readUserDataInternal(tag.(freefare.UltralightTag))
+	return out, err
 }
 
 func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
@@ -298,21 +316,41 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 		return err
 	}
 	defer device.Close()
-	tags, err := freefare.GetTags(device)
-	if err != nil {
-		return errors.Join(errors.New("failed to get tags"), err)
+	const maxWriteTries = 20                     // TODO: ok?
+	const retryWaitTime = 100 * time.Millisecond // TODO: ok?
+	var tags []freefare.Tag
+	for i := 0; i < maxWriteTries; i++ {
+		tags, err = freefare.GetTags(device)
+		if err != nil {
+			err = errors.Join(errors.New("failed to get tags"), err)
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		if len(tags) != 1 {
+			err = fmt.Errorf("expected 1 tag, got %d", len(tags))
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		tag := tags[0]
+		if err = tag.Connect(); err != nil {
+			err = errors.Join(errors.New("failed to connect"), err)
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
+			err = ErrWrongTag
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		err = writeUserDataInternal(tag.(freefare.UltralightTag), newUID)
+		if err != nil {
+			time.Sleep(retryWaitTime)
+			continue
+		}
+		return nil
 	}
-	if len(tags) != 1 {
-		return fmt.Errorf("expected 1 tag, got %d", len(tags))
-	}
-	tag := tags[0]
-	if err = tag.Connect(); err != nil {
-		return errors.Join(errors.New("failed to connect"), err)
-	}
-	if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
-		return ErrWrongTag
-	}
-	return writeUserDataInternal(tag.(freefare.UltralightTag), newUID) // TODO: ENSURE WRITING CORRECT SIZE!
+	return err
+
 }
 
 func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byte, error) {
@@ -331,49 +369,44 @@ func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byt
 }
 
 func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteSize]byte, tries ...int) error {
-	//retries := 0 // TODO: implement retries!
-	//if len(tries) != 0 {
-	//	if tries[0]<1{
-	//		return errors.New("tries should be greater than than 1")
-	//	}
+	//initialUID, err := readUserDataInternal(ntag) // TODO: probably dont need
+	//if err != nil {
+	//	log.Fatal(err.Error())
+	//	return err
 	//}
-	initialUID, err := readUserDataInternal(ntag) // TODO: probably dont need
-	if err != nil {
-		log.Fatal(err.Error())
-		return err
-	}
 	write := func(toWriteBytes [8]byte) error {
 		for i := 0; i <= 1; i++ {
 			page := 4 + i
-			err = ntag.WritePage(byte(page), [4]byte(toWriteBytes[i*4:((i+1)*4)]))
+			err := ntag.WritePage(byte(page), [4]byte(toWriteBytes[i*4:((i+1)*4)]))
 			if err != nil {
 				return errors.Join(fmt.Errorf("failed to write data for page %d", page), err)
 			}
 		}
 		return nil
 	}
-	err = write(newUID)
+	err := write(newUID)
 	if err != nil {
-		println("failed to write, reverting")
-		errB := write(initialUID) // TODO: probably get rid of!
-		if errB != nil {
-			err = errors.Join(errors.New("FAILED TO REWRITE ORIGINAL DATA"), err)
-		}
+		//println("failed to write, reverting")
+		//errB := write(initialUID) // TODO: probably get rid of!
+		//if errB != nil {
+		//	err = errors.Join(errors.New("FAILED TO REWRITE ORIGINAL DATA"), err)
+		//}
 		return err
 	}
+	return nil
 
-	//read again to confirm
-	finalUID, err := readUserDataInternal(ntag)
-	if err != nil {
-		// TODO: maybe dont error but just print a warning like so!
-		println("warning: failed to read user data to confirm write")
-		return nil
-	}
-	// Reread to confirm (optional) // TODO: probably get rid of!
-	finalStr := string(finalUID[:])
-	if finalStr != string(newUID[:]) {
-		return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
-	}
-	println("Confirmed that the write succeeded!")
+	////read again to confirm
+	//finalUID, err := readUserDataInternal(ntag)
+	//if err != nil {
+	//	// TODO: maybe dont error but just print a warning like so!
+	//	println("warning: failed to read user data to confirm write")
+	//	return nil
+	//}
+	//// Reread to confirm (optional) // TODO: probably get rid of!
+	//finalStr := string(finalUID[:])
+	//if finalStr != string(newUID[:]) {
+	//	return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
+	//}
+	//println("Confirmed that the write succeeded!")
 	return nil
 }
