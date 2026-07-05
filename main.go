@@ -33,14 +33,14 @@ func main() {
 	clientName := string(namespace)
 	ctx := context.Background()
 	for {
+		// TODO: need to wrap in a panic handler????
 		println("starting new client connection")
-		closeClient, err := client.New(ctx, clientName, serverHostname, "/rfid/ws", 443, secret, utils.Pointer("wss")) // TODO: unsure about https/ws/wss here!
+
+		err := client.New(ctx, clientName, serverHostname, "/rfid/ws", 443, secret, utils.Pointer("wss")) // TODO: unsure about https/ws/wss here!
 		if err != nil {
-			closeClient()
 			println("Restarting client", "Fatal client error: "+err.Error())
 			continue
 		}
-		closeClient()
 		println("Client closed gracefully, exiting...")
 		return
 	}

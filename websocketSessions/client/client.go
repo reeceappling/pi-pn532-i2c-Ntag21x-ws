@@ -33,7 +33,7 @@ var (
 )
 
 // New starts a new client closeable via the context passed in
-func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePort int, serviceSecret string, customScheme *string) (context.CancelFunc, error) {
+func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePort int, serviceSecret string, customScheme *string) (err error) {
 	clientCtx, closeFunc := context.WithCancel(ctx)
 	scheme := utils.Default(customScheme, "ws")
 	host := fmt.Sprintf(`%s:%d`, RemoteHost, RemotePort) // TODO: ensure 443 ok!
@@ -45,29 +45,33 @@ func New(ctx context.Context, Name, RemoteHost, RemoteEndpoint string, RemotePor
 		close:         closeFunc,
 		recieve:       recieve,
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			println("recovered from panic. Restarting...")
+			err = errors.New("recovered from panic")
+			// TODO: client.conn.Close()?
+		}
+	}()
 	headers := http.Header{
 		"Origin": []string{RemoteHost}, // TODO: trial doing the origin stuff! search "trial doing the origin stuff!"
 	}
 	println("dialing", client.ServerUrl.String())
-	conn, resp, err := websocket.DefaultDialer.Dial(client.ServerUrl.String(), headers) // TODO: non-default dialer?
+	conn, resp, errr := websocket.DefaultDialer.Dial(client.ServerUrl.String(), headers) // TODO: non-default dialer?
+	err = errr
 	if err != nil {
 		if resp == nil {
-			return nil, errors.Join(
+			return errors.Join(
 				ErrNoDialResponse, err,
 			)
 		}
-		return nil, errors.Join(
+		return errors.Join(
 			ErrHandshakeFailure,
 			fmt.Errorf("handshake failed with status %d\n", resp.StatusCode),
 			err,
 		)
 	}
 	client.conn = conn // TODO: figure out when to close!
-	err = client.connectAndListen(clientCtx, recieve)
-	if err != nil {
-		return nil, err
-	}
-	return closeFunc, nil
+	return client.connectAndListen(clientCtx, recieve)
 }
 
 func (client Client) Close() { // TODO: figure out where to use!
