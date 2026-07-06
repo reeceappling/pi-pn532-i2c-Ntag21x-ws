@@ -312,6 +312,7 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 	}
 	mgr.sessions[req.Name] = s
 	s.Close = func() {
+		println("trying to end session: " + req.Name)
 		mgr.Delete(req.Name)
 		// TODO: close the connection???
 		s.Conn.Close()
