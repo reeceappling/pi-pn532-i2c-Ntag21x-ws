@@ -273,10 +273,11 @@ func OpenDevice() (nfc.Device, error) {
 }
 
 const (
-	maxReadWriteTries = 10                     // TODO: ok?
+	maxReadWriteTries = 20                     // TODO: ok?
 	maxReadTries      = maxReadWriteTries      // TODO: ok?
 	maxWriteTries     = maxReadWriteTries      // TODO: ok?
 	retryWaitTime     = 200 * time.Millisecond // TODO: ok?
+	// TODO: with current settings, this is a 4 second (+processing time) timeout
 )
 
 func readUserData() (out [shared.RfidByteSize]byte, err error) {
