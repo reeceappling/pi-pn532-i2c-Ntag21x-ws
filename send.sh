@@ -5,6 +5,7 @@
 # scp /Users/ZNM4U7N/projects/other/pi-pn532-i2c-Ntag21x-ws/send.sh reeceappling@192.168.1.159:/home/reeceappling/rfidTest/
 # TODO: DO THIS ON THE PI INSTEAD!
 # 1. Create a 128MB RAM disk for Go's temporary compiler files
+# mkdir -p /home/reeceappling/gotmp && sudo mount -t tmpfs -o size=256M tmpfs /home/reeceappling/gotmp && export GOTMPDIR=/home/reeceappling/gotmp
 mkdir -p /home/reeceappling/gotmp
 sudo mount -t tmpfs -o size=256M tmpfs /home/reeceappling/gotmp
 #sudo mount -o remount,size=256M /home/pi/gotmp

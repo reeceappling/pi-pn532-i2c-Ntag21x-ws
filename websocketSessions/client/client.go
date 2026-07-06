@@ -132,6 +132,7 @@ func (client Client) connectAndListen(ctx context.Context, receive chan shared.R
 		println("failed signup: " + err.Error())
 		return err
 	}
+	
 	// Needed so no autoPong
 	client.conn.SetPingHandler(func(string) error {
 		return nil

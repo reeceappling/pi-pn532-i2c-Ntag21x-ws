@@ -77,7 +77,11 @@ func (sockMsg *SocketMessage) WithType(msgType int) *SocketMessage {
 	return sockMsg
 }
 func (sockMsg *SocketMessage) WriteTo(c *websocket.Conn) error {
-	println("Attempting to write message:" + sockMsg.String()) // TODO: del
+	println("Attempting to write message:" + sockMsg.String())                  // TODO: del
+	if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil { // TODO: ok?
+		println("failed to set write deadline: " + err.Error())
+		return err
+	}
 	err := c.WriteMessage(sockMsg.Type, sockMsg.Data)
 	if err != nil {
 		return errors.Join(errors.New("failed to write socket message to connection"), err)

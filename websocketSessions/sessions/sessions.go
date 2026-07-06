@@ -76,6 +76,7 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 	s.Lock()
 	defer s.Unlock()
 
+	s.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	err := shared.NewRenewalRequest(name).WriteTo(s.Conn) // TODO: pong handler?
 	if err != nil {
 		s.processRenewalFailure()
@@ -119,14 +120,22 @@ func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration
 	return m
 }
 
-const readResponseTimeout = 20 * time.Second  // TODO: time ok?
-const writeResponseTimeout = 20 * time.Second // TODO: time ok?
+const writeTimeout = 5 * time.Second
+const responseTimeout = 10 * time.Second // TODO: ok?
+const readResponseTimeout = responseTimeout
+const writeResponseTimeout = responseTimeout
 
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
 	defer sess.Unlock()
 	println("creating read request") // TODO: del
-	err := shared.NewReadRequest().
+	// TODO: write deadline ok?
+	err := sess.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err != nil {
+		println("failed to set write deadline")
+		return [shared.RfidByteSize]byte{}, err
+	}
+	err = shared.NewReadRequest().
 		WriteTo(sess.Conn)
 	if err != nil {
 		println("failed to write read request: " + err.Error()) // TODO: del
@@ -151,7 +160,7 @@ func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteS
 	}
 	err = sess.TryGetMessage(ctx, writeResponseTimeout).ProcessWriteResponse(toWrite)
 	if err != nil {
-		println("error processing read response: " + err.Error())
+		println("error processing write response: " + err.Error())
 	}
 	return err
 }

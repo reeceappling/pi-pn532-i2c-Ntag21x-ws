@@ -40,16 +40,19 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 	mgr := &SessionManager{
 		sessions: map[shared.RfidReaderName]*sessions.Session{},
 		secret:   secret,
-		cleanup:  time.NewTicker(freq), // TODO: keep or no?
+		cleanup:  time.NewTicker(freq), // TODO: get rid of?
 		done:     make(chan struct{}),  // TODO: keep or no?
 		RWMutex:  &sync.RWMutex{},
 	}
 
 	// Heartbeat thread // TODO: ensure ok!
-	heartbeatTicker := time.NewTicker(90 * time.Second)
+	heartbeatTicker := time.NewTicker(45 * time.Second) // max is 100sec for cloudflare, so just go slightly below that!
 	// TODO: get rid of the cleanup ticker? this should cover it
+	// 2. Start Write pump (Sends Pings and app messages)
 	go func() {
+
 		defer func() {
+			heartbeatTicker.Stop()
 			mgr.cleanup.Stop()
 			mgr.Lock()
 			wg := &sync.WaitGroup{}
@@ -79,6 +82,18 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 			mgr.RUnlock()
 		}
 	}()
+
+	//// 3. Read pump (Processes incoming messages)
+	//for {
+	//	_, _, err := conn.ReadMessage()
+	//	if err != nil {
+	//		if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+	//			log.Printf("error: %v", err)
+	//		}
+	//		close(done)
+	//		break
+	//	}
+	//}
 
 	//go func() {
 	//	defer func() {
@@ -381,6 +396,19 @@ func ServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	println("Adding session for rfid scanner: " + req.Name)
 	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
+	pongWait := 60 * time.Second // TODO: seems wayyyy too late...
+	err = conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err != nil {
+		err := errors.Join(errors.New("failed to set read deadline"), err)
+		println(err.Error()) // TODO: del?
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	conn.SetPongHandler(func(string) error {
+		// Reset read deadline upon receiving a Pong from the client
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 	err = mgr.Add(ctx, newSession, req)
 	if err != nil {
 		fmt.Println("Error adding websocket session:", err)
