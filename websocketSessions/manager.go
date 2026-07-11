@@ -3,7 +3,6 @@ package websocketSessions
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/reeceappling/goUtils/v2/utils"
 	"github.com/reeceappling/pi-pn532-i2c-Ntag21x-ws/v2/websocketSessions/sessions"
@@ -35,7 +34,7 @@ type SessionManager struct {
 
 var defaultCleanupFrequency = 5 * time.Minute
 
-func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionManager { // TODO: FIXME!!!!!
+func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionManager {
 	freq := utils.Default(cleanupFrequency, defaultCleanupFrequency)
 	mgr := &SessionManager{
 		sessions: map[shared.RfidReaderName]*sessions.Session{},
@@ -45,8 +44,8 @@ func NewSessionManager(cleanupFrequency *time.Duration, secret string) *SessionM
 		RWMutex:  &sync.RWMutex{},
 	}
 
-	// Heartbeat thread // TODO: ensure ok!
-	heartbeatTicker := time.NewTicker(45 * time.Second) // max is 100sec for cloudflare, so just go slightly below that!
+	// Heartbeat thread
+	heartbeatTicker := time.NewTicker(45 * time.Second) // max is 100sec for cloudflare, so just go slightly below half of that!
 	// TODO: get rid of the cleanup ticker? this should cover it
 	// 2. Start Write pump (Sends Pings and app messages)
 	go func() {
@@ -213,58 +212,35 @@ func GetSessionManager(ctx context.Context) *SessionManager {
 
 func (mgr *SessionManager) ParseAndValidateSignupRequest(reqMsg shared.ReceivedMsg) (req shared.SignupRequest, err error) {
 	if mgr == nil {
-		println("no mgr") // TODO: del
 		return req, ErrNoSessionManager
 	}
 
-	println("checking response data") // TODO: del
 	out, err := reqMsg.AsSignupRequest()
 	if err != nil {
-		println(err.Error()) // TODO: del
 		return req, err
 	}
 	if out == nil {
-		err = errors.New("got nil response from signup request, should never happen")
-		println(err.Error()) // TODO: del
+		err = errors.Join(shared.ErrSignupResponseNil, shared.ErrShouldNeverHappen)
 		return req, err
 	}
 	return *out, err
 }
 func (mgr *SessionManager) GetAndValidateSignupRequest(ctx context.Context, conn *websocket.Conn) (req shared.SignupRequest, err error) {
 	if mgr == nil {
-		println("no mgr") // TODO: del
 		return req, ErrNoSessionManager
 	}
-	received := shared.TryGetMessage(ctx, conn, 20*time.Second) // TODO: 10 ok? 20?
+	received := shared.TryGetMessage(ctx, conn, 20*time.Second)
 	return mgr.ParseAndValidateSignupRequest(received)
-
-	//println("checking response data") // TODO: del
-	//var reqBytes []byte
-	//if reqMsg.Err != nil { // TODO: del
-	//	println("Err: " + reqMsg.Err.Error()) // TODO: del
-	//}
-	//if reqMsg.Bytes != nil { // TODO: del
-	//	println("reqBytes " + string(reqMsg.Bytes)) // TODO: del
-	//}
-	//println(fmt.Sprintf(`reqType %d`, reqMsg.MsgType)) // TODO: del // TODO: coming back as 2?
-	//reqBytes, err = reqMsg.GetRequestData(SignupRequestType, shared.FirstByteSignup)
-	//if err != nil {
-	//	return
-	//}
-
-	//println("unmarshalling response data") // TODO: del
-	//err = json.Unmarshal(reqBytes, &req)
-	//if err != nil {
-	//	return shared.SignupRequest{}, err
-	//}
-	//return
 }
+
+var (
+	ErrGettingRfidSession = errors.New("failed to get rfid session")
+)
 
 func (mgr *SessionManager) ReadRfid(ctx context.Context, readerName shared.RfidReaderName) ([shared.RfidByteSize]byte, error) {
 	sess, err := mgr.GetSession(readerName)
 	if err != nil {
-		println("failed to get rfid session: " + err.Error()) // TODO: del
-		return [shared.RfidByteSize]byte{}, err
+		return [shared.RfidByteSize]byte{}, errors.Join(ErrGettingRfidSession, err)
 	}
 	return sess.TryReadRFID(ctx)
 }
@@ -289,8 +265,6 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 		return ErrNoSessionManager
 	}
 	if !mgr.SecretValid(req.Secret) {
-		err = fmt.Errorf("request secret: %s, expected %s", req.Secret, mgr.secret) // TODO: DELETEME!
-		println(err.Error())                                                        // TODO: DELETEME!
 		s.Close()
 		return errors.Join(err, ErrSecretMismatch)
 	}
@@ -302,7 +276,7 @@ func (mgr *SessionManager) Add(cancellableCtx context.Context, s *sessions.Sessi
 		existingSession.Close() // TODO: ok?
 		// TODO: s.Close()?
 		// TODO: check old session and close if it is not working?
-		return errors.New("session already exists") // TODO: MOVE?
+		return ErrSessionAlreadyExists
 	}
 
 	err = shared.NewSignupResponse(req.Name).WriteTo(s.Conn)
@@ -355,68 +329,66 @@ func (mgr *SessionManager) Cleanup() {
 //	return result
 //}
 
-/// TODO: TRYING OUT STUFF DOWN HERE!!!!
-
-func ServerHandler(w http.ResponseWriter, r *http.Request) {
-	timeBtwnChecks := 30 * time.Second // TODO: ok?
-	maxFailures := 1                   // TODO: ok?
-	requestTimeout := 10 * time.Second // TODO: ok?
-	sessionTimeout := 5 * time.Minute  // TODO: ok?
-	ctx := r.Context()
-	mgr := GetSessionManager(ctx)
-	if mgr == nil {
-		println("no session mgr:" + ErrNoSessionManager.Error())
-		http.Error(w, "no session mgr:"+ErrNoSessionManager.Error(), http.StatusInternalServerError)
-		return
-	}
-	println("upgrading connection") // TODO: del
-	conn, errUpgr := upgrader.Upgrade(w, r, nil)
-	if errUpgr != nil {
-		err := errors.Join(errors.New("Error upgrading connection"), errUpgr)
-		println(err.Error()) // TODO: del?
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	//defer conn.Close()
-
-	//try to read and validate format of signup message
-	println("validating signup") // TODO: del
-	// TODO: HANGING HERE!
-
-	req, err := mgr.GetAndValidateSignupRequest(ctx, conn)
-	if err != nil {
-		if e := conn.Close(); e != nil {
-			println("failed to close connection on signup request retrieval and parsing: " + e.Error())
-		}
-		return
-	}
-	//req, err := mgr.ParseAndValidateSignupRequest(shared.TryGetMessage(ctx, conn))
-	//if err != nil {
-	//	return // TODO: ok?
-	//}
-
-	println("Adding session for rfid scanner: " + req.Name)
-	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
-	pongWait := 60 * time.Second // TODO: seems wayyyy too late...
-	err = conn.SetReadDeadline(time.Now().Add(pongWait))
-	if err != nil {
-		err := errors.Join(errors.New("failed to set read deadline"), err)
-		println(err.Error()) // TODO: del?
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	conn.SetPongHandler(func(string) error {
-		// Reset read deadline upon receiving a Pong from the client
-		conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-	err = mgr.Add(ctx, newSession, req)
-	if err != nil {
-		fmt.Println("Error adding websocket session:", err)
-		return
-	}
-	// TODO: reenable if not working _ = <-ctx.Done() // Keep request alive until ready to close connection
-}
+//func ServerHandler(w http.ResponseWriter, r *http.Request) {
+//	timeBtwnChecks := 30 * time.Second // TODO: ok?
+//	maxFailures := 1                   // TODO: ok?
+//	requestTimeout := 10 * time.Second // TODO: ok?
+//	sessionTimeout := 5 * time.Minute  // TODO: ok?
+//	ctx := r.Context()
+//	mgr := GetSessionManager(ctx)
+//	if mgr == nil {
+//		println("no session mgr:" + ErrNoSessionManager.Error())
+//		http.Error(w, "no session mgr:"+ErrNoSessionManager.Error(), http.StatusInternalServerError)
+//		return
+//	}
+//	println("upgrading connection") // TODO: del
+//	conn, errUpgr := upgrader.Upgrade(w, r, nil)
+//	if errUpgr != nil {
+//		err := errors.Join(errors.New("Error upgrading connection"), errUpgr)
+//		println(err.Error()) // TODO: del?
+//		http.Error(w, err.Error(), http.StatusInternalServerError)
+//		return
+//	}
+//	//defer conn.Close()
+//
+//	//try to read and validate format of signup message
+//	println("validating signup") // TODO: del
+//	// TODO: HANGING HERE!
+//
+//	req, err := mgr.GetAndValidateSignupRequest(ctx, conn)
+//	if err != nil {
+//		if e := conn.Close(); e != nil {
+//			println("failed to close connection on signup request retrieval and parsing: " + e.Error())
+//		}
+//		return
+//	}
+//	//req, err := mgr.ParseAndValidateSignupRequest(shared.TryGetMessage(ctx, conn))
+//	//if err != nil {
+//	//	return // TODO: ok?
+//	//}
+//
+//	println("Adding session for rfid scanner: " + req.Name)
+//	newSession := sessions.New(conn, &sessionTimeout, &requestTimeout, &timeBtwnChecks, &maxFailures)
+//	pongWait := 60 * time.Second // TODO: seems wayyyy too late...
+//	err = conn.SetReadDeadline(time.Now().Add(pongWait))
+//	if err != nil {
+//		err := errors.Join(errors.New("failed to set read deadline"), err)
+//		println(err.Error()) // TODO: del?
+//		http.Error(w, err.Error(), http.StatusInternalServerError)
+//		return
+//	}
+//	conn.SetPongHandler(func(string) error {
+//		// Reset read deadline upon receiving a Pong from the client
+//		conn.SetReadDeadline(time.Now().Add(pongWait))
+//		return nil
+//	})
+//	err = mgr.Add(ctx, newSession, req)
+//	if err != nil {
+//		fmt.Println("Error adding websocket session:", err)
+//		return
+//	}
+//	// TODO: reenable if not working _ = <-ctx.Done() // Keep request alive until ready to close connection
+//}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {

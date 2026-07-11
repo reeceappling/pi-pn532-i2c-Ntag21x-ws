@@ -13,8 +13,6 @@ var (
 	ErrBadSession      = errors.New("bad session found in storage")
 )
 
-// TODO: consider switching other sessions to these
-
 type FullSession[T any, U comparable] struct {
 	Id     U
 	Data   T
@@ -72,8 +70,9 @@ func (sm *Map[T, U]) AddSession(id U, sess Session[T]) Session[T] {
 	return updatedSess
 }
 
-func (sm *Map[T, U]) NewSession(id U, data T) (Session[T], error) { // TODO: DONT OVERWRITE AN EXISTING SESSION!
+func (sm *Map[T, U]) NewSession(id U, data T) (Session[T], error) {
 	if _, exists := sm.sessions.Load(id); exists {
+		// Don't overwrite an existing session
 		return Session[T]{}, errors.New("session with that ID already exists")
 	}
 	updatedSess := Session[T]{

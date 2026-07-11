@@ -122,17 +122,17 @@ func (client Client) connectAndListen(ctx context.Context, receive chan shared.R
 	defer func() {
 		errC := client.conn.Close() // Close connection at the end
 		if errC != nil {
-			err = errors.Join(ErrClosing, errC) // TODO: ensure this makes it out in tests!
+			err = errors.Join(err, ErrClosing, errC)                      // TODO: ensure this makes it out in tests!
+			println("Error closing websocket connection: " + err.Error()) // TODO: ???
 		}
-		// TODO: something here
 	}()
 
 	err = client.signUp(ctx)
 	if err != nil {
-		println("failed signup: " + err.Error())
+		println("failed signup: " + err.Error()) // TODO: ???
 		return err
 	}
-	
+
 	// Needed so no autoPong
 	client.conn.SetPingHandler(func(string) error {
 		return nil
@@ -144,30 +144,33 @@ func (client Client) connectAndListen(ctx context.Context, receive chan shared.R
 
 		select {
 		case <-ctx.Done():
+			println("Context done, stopping client")
 			return err
-
 		default:
-
 			err = client.listenAndHandleOne(ctx)
 			if err != nil {
-				println("fatal error handling request, stopping client")
-				return
+				println("stopping client, fatal error handling request: " + err.Error())
+				return err
 			}
 		}
 	}
 }
 
+var (
+	ErrNoBytes     = errors.New("received no bytes on initial request data")
+	ErrNilBinMsg   = errors.New("reader/writer got a nil binary message, should never happen")
+	ErrEmptyBinMsg = errors.New("reader/writer got an empty binary message, should never happen")
+)
+
 func (client Client) listenAndHandleOne(ctx context.Context) error {
 	m := shared.TryGetMessage(ctx, client.conn, 30*time.Second)
 	if m.Err != nil {
 		if errors.Is(m.Err, shared.ErrGetMessageTimeout) { // Don't crash on non-found message
-			//println("listenAndHandleOne timed out") // TODO: probably dont time out on the initial message...
+			// Do not return error on timeout
 			return nil
 		}
-		e := errors.Join(errors.New("failed to read websocket response on client"), m.Err)
-		println("possibly fatal error: ", e.Error())
-		//time.Sleep(2 * time.Second) // TODO: ok?
-		return e
+		// Return error on non-timeout errors
+		return errors.Join(errors.New("failed to read websocket response on client"), m.Err)
 	}
 	var outgoing = &shared.SocketMessage{}
 	incoming := m.SocketMsgUnsafe()
@@ -177,38 +180,29 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	switch m.MsgType {
 	case websocket.PingMessage: // For keeping session alive
 		if incoming.Data == nil || len(incoming.Data) == 0 {
-			outgoing = shared.NewErrorResponse(errors.New("received no bytes on initial request data"))
+			outgoing = shared.NewErrorResponse(ErrNoBytes)
 		} else {
 			outgoing = client.handleRenewalRequest(incoming)
-			//err = client.conn.WriteControl(websocket.PongMessage, []byte(client.serviceSecret), time.Now().Add(10*time.Second)) // TODO: move
-			//if err != nil {
-			//	// TODO: handle the error!
-			//}
 		}
 
 	case websocket.TextMessage:
 		outgoing = shared.NewErrorResponse(errors.New("reader got an error (text) message from server, should never happen: " + string(m.Bytes)))
 	case websocket.BinaryMessage:
 		if m.Bytes == nil {
-			outgoing = shared.NewErrorResponse(errors.New("reader/writer got a nil binary message, should never happen"))
+			outgoing = shared.NewErrorResponse(ErrNilBinMsg)
 			break
 		}
 		if len(m.Bytes) == 0 {
-			outgoing = shared.NewErrorResponse(errors.New("reader/writer got an empty binary message, should never happen"))
+			outgoing = shared.NewErrorResponse(ErrEmptyBinMsg)
 			break
 		}
 		firstByte := m.Bytes[0]
 		switch firstByte {
 		case shared.FirstByteRead:
-			println("got a binary first message... " + incoming.String(shared.ReadRequestType)) // TODO: del
-			println("got a read request... ")                                                   // TODO: del
 			outgoing = client.handleReadRequest(incoming)
 		case shared.FirstByteWrite:
-			println("got a binary first message... " + incoming.String(shared.WriteRequestType)) // TODO: del
-			println("got a write request... ")                                                   // TODO: del
 			outgoing = client.handleWriteRequest(incoming)
 		default:
-			println("got a binary first message... " + incoming.String()) // TODO: del
 			outgoing = shared.NewErrorResponse(fmt.Errorf("invalid binary message first byte %d", m.Bytes[0]))
 		}
 	case websocket.CloseMessage: // For closing client
@@ -226,22 +220,22 @@ func (client Client) listenAndHandleOne(ctx context.Context) error {
 	if err != nil {
 		println("write output failed for reason: " + err.Error()) // TODO: ok to not crash on this?
 	}
-	println("sent response!" + outgoing.String()) // TODO: del
+	//println("sent response!" + outgoing.String()) // TODO: del
 	return nil
 }
 
 func (client Client) handleReadRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
 	err := m.ValidateReadRequest()
 	if err != nil {
-		println("failed to validate read request... " + err.Error()) // TODO: del
+		//println("failed to validate read request... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(errors.Join(errors.New("bad read request"), err))
 	}
 	tempResp, err := readUserData()
 	if err != nil {
-		println("failed to read user data... " + err.Error()) // TODO: del
+		//println("failed to read user data... " + err.Error()) // TODO: del
 		return shared.NewErrorResponse(errors.Join(errors.New("failed read in i2c"), err))
 	}
-	println("sending result:..." + string(tempResp[:])) // TODO: del
+	//println("sending result:..." + string(tempResp[:])) // TODO: del
 	return shared.NewReadResponse(tempResp)
 }
 func (client Client) handleRenewalRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
@@ -251,7 +245,7 @@ func (client Client) handleRenewalRequest(m *shared.SocketMessage) (response *sh
 	if client.name != string(m.Data) {
 		return shared.NewErrorResponse(errors.New("renewal name mismatch"))
 	}
-	return shared.NewRenewalResponse(client.serviceSecret) // TODO: conn.WriteControl instead?
+	return shared.NewRenewalResponse(client.serviceSecret)
 }
 func (client Client) handleWriteRequest(m *shared.SocketMessage) (response *shared.SocketMessage) {
 	toWrite, err := m.ValidateWriteRequest()
@@ -274,10 +268,10 @@ func OpenDevice() (nfc.Device, error) {
 }
 
 const (
-	maxReadWriteTries = 20                     // TODO: ok?
-	maxReadTries      = maxReadWriteTries      // TODO: ok?
-	maxWriteTries     = maxReadWriteTries      // TODO: ok?
-	retryWaitTime     = 200 * time.Millisecond // TODO: ok?
+	maxReadWriteTries = 20
+	maxReadTries      = maxReadWriteTries
+	maxWriteTries     = maxReadWriteTries
+	retryWaitTime     = 200 * time.Millisecond
 	// TODO: with current settings, this is a 4 second (+processing time) timeout
 )
 
@@ -346,7 +340,7 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 			time.Sleep(retryWaitTime)
 			continue
 		}
-		if tag.Type() != freefare.Ultralight { // TODO: should really be NTAG213 (issue with libNfc and libFreefare), but Ultralight will work for our use case
+		if tag.Type() != freefare.Ultralight {
 			err = ErrWrongTag
 			time.Sleep(retryWaitTime)
 			continue
@@ -363,7 +357,7 @@ func writeUserData(newUID [shared.RfidByteSize]byte) (err error) {
 }
 
 func readUserDataInternal(ntag freefare.UltralightTag) ([shared.RfidByteSize]byte, error) {
-	println("reading user data") // TODO: del
+	//println("reading user data") // TODO: del
 	UID := [8]byte{}
 	for i := 0; i < 2; i++ { // 2 pages of 4 bytes each
 		userData, err := ntag.ReadPage(uint8(i + 4)) // TODO: why +4???? (is it because there are unwriteable or settings bytes in the first 4?)
@@ -417,5 +411,5 @@ func writeUserDataInternal(ntag freefare.UltralightTag, newUID [shared.RfidByteS
 	//	return fmt.Errorf("Mismatch of written values!\nWas:\n%s\nShould be:\n%s\n", finalStr, string(newUID[:]))
 	//}
 	//println("Confirmed that the write succeeded!")
-	return nil
+	//return nil
 }

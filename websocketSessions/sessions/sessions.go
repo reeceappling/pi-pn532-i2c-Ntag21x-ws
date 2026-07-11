@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// TODO: everything below here is new
-
 type Session struct { // TODO: reevaluate
 	Conn             *websocket.Conn
 	Expires          time.Time
@@ -49,7 +47,7 @@ func New(conn *websocket.Conn, sessionTTL *time.Duration, reqTimeout *time.Durat
 			if err != nil {
 				println("Error closing session before adding to sessions: " + err.Error())
 			}
-		}, // TODO: ????
+		},
 		failedChecks: 0,
 	}
 }
@@ -72,6 +70,14 @@ func (s *Session) processRenewalFailure() {
 	s.SetSessionExpiration(time.Now().Add(s.ttl))
 }
 
+var (
+	ErrBadRenewResponse     = errors.New("bad renewal response")
+	ErrSendRenewFail        = errors.New("failed to send renewal message")
+	ErrBadRenewResponseType = errors.New("bad renewal response type")
+	ErrResponseTooSmall     = errors.New("response too small")
+	ErrSecretMismatch       = errors.New("secret mismatch")
+)
+
 func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 	s.Lock()
 	defer s.Unlock()
@@ -80,26 +86,26 @@ func (s *Session) TryRenew(name, expSecret string) (renewErr error) {
 	err := shared.NewRenewalRequest(name).WriteTo(s.Conn) // TODO: pong handler?
 	if err != nil {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("failed to send renewal message"), err)
+		return errors.Join(ErrSendRenewFail, err)
 	}
 	// READ for a pong message (within the allowed timeframe)
 	msg := s.TryGetMessage(context.Background(), 12*time.Second)
 	if msg.Err != nil {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("bad renewal response"), msg.Err) // TODO: ok?
+		return errors.Join(ErrBadRenewResponse, msg.Err)
 	}
 	if msg.MsgType != websocket.PongMessage {
 		s.processRenewalFailure()
-		return errors.New("bad renewal response type") // TODO: ok?
+		return ErrBadRenewResponseType
 	}
 	sm := msg.SocketMsgUnsafe()
 	if len(sm.Data) == 0 {
 		s.processRenewalFailure()
-		return errors.New("response too small") // TODO: ok?
+		return ErrResponseTooSmall
 	}
 	if string(sm.Data) != expSecret {
 		s.processRenewalFailure()
-		return errors.Join(errors.New("failed to renew client lease, secret mismatch"), err)
+		return errors.Join(ErrSecretMismatch, err)
 	}
 	s.processSuccessfulRenewal()
 	return nil
@@ -112,8 +118,8 @@ func (s *Session) SetSessionExpiration(t time.Time) {
 func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration) shared.ReceivedMsg {
 	timedCtx, cancel := context.WithTimeout(ctx, sess.requestTimeout)
 	defer cancel()
-	m := shared.TryGetMessage(timedCtx, sess.Conn, timeout...) // TODO: time ok?
-	println("Got message:" + m.String())                       // TODO: del?
+	m := shared.TryGetMessage(timedCtx, sess.Conn, timeout...)
+	//println("Got message:" + m.String())                       // TODO: del?
 	//if m.Err != nil {
 	//	println("g0t erroneous message. Returning it anyways!")
 	//}
@@ -121,14 +127,14 @@ func (sess *Session) TryGetMessage(ctx context.Context, timeout ...time.Duration
 }
 
 const writeTimeout = 5 * time.Second
-const responseTimeout = 10 * time.Second // TODO: ok?
+const responseTimeout = 10 * time.Second
 const readResponseTimeout = responseTimeout
 const writeResponseTimeout = responseTimeout
 
 func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte, error) {
 	sess.Lock()
 	defer sess.Unlock()
-	println("creating read request") // TODO: del
+	//println("creating read request") // TODO: del
 	// TODO: write deadline ok?
 	err := sess.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err != nil {
@@ -138,10 +144,10 @@ func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte
 	err = shared.NewReadRequest().
 		WriteTo(sess.Conn)
 	if err != nil {
-		println("failed to write read request: " + err.Error()) // TODO: del
+		println("failed to write read request: " + err.Error())
 		return [shared.RfidByteSize]byte{}, err
 	}
-	println("trying to get response") // TODO: del
+	//println("trying to get response") // TODO: del
 	result, err := sess.TryGetMessage(ctx, readResponseTimeout).ProcessReadResponse()
 	if err != nil {
 		println("error processing read response: " + err.Error())
@@ -149,7 +155,8 @@ func (sess *Session) TryReadRFID(ctx context.Context) ([shared.RfidByteSize]byte
 	return result, err
 }
 
-func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error { // TODO: this is serverside
+// TryWriteRFID is serverside
+func (sess *Session) TryWriteRFID(ctx context.Context, toWrite [shared.RfidByteSize]byte) error {
 	sess.Lock()
 	defer sess.Unlock()
 	err := shared.NewWriteRequest(toWrite).

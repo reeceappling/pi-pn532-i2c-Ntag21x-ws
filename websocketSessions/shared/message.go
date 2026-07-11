@@ -16,7 +16,10 @@ const (
 	MessageTypeWrite
 )
 
-var ErrGetMessageTimeout = errors.New("timeout")
+var (
+	ErrGetMessageTimeout = errors.New("timeout")
+	ErrShouldNeverHappen = errors.New("should never happen")
+)
 
 type RfidReaderName string
 
@@ -64,7 +67,7 @@ func (sockMsg *SocketMessage) ValidateWriteRequest() ([RfidByteSize]byte, error)
 	if sockMsg.Data[0] != FirstByteWrite {
 		return [RfidByteSize]byte{}, errors.New("incorrect first byte on write request")
 	}
-	result := [RfidByteSize]byte(sockMsg.Data[1:]) // TODO: ensure works
+	result := [RfidByteSize]byte(sockMsg.Data[1:])
 	return result, nil
 }
 
@@ -77,8 +80,8 @@ func (sockMsg *SocketMessage) WithType(msgType int) *SocketMessage {
 	return sockMsg
 }
 func (sockMsg *SocketMessage) WriteTo(c *websocket.Conn) error {
-	println("Attempting to write message:" + sockMsg.String())                  // TODO: del
-	if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil { // TODO: ok?
+	//println("Attempting to write message:" + sockMsg.String())                  // TODO: del
+	if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		println("failed to set write deadline: " + err.Error())
 		return err
 	}
@@ -143,24 +146,29 @@ type SignupResponse struct {
 	ClientName string `json:"clientName"`
 }
 
+var (
+	ErrSignupResponseNil = errors.New("Signup response socket message was nil")
+	ErrSignupReqNil      = errors.New("Signup request socket message was nil")
+)
+
 func (resp *SignupResponse) Validate(expectedName string) error {
 	if resp.ClientName != expectedName {
 		return fmt.Errorf(`Expected name %s, received name %s`, expectedName, resp.ClientName)
 	}
 	return nil
 }
-func (msg *SocketMessage) ParseSignupResponse() (out *SignupResponse, err error) { // TODO: USE!
+func (msg *SocketMessage) ParseSignupResponse() (out *SignupResponse, err error) {
 	if msg == nil {
-		return nil, errors.New("Signup response socket message was nil")
+		return nil, ErrSignupResponseNil
 	}
 	if msg.Type != SignupResponseType {
 		return nil, fmt.Errorf(`2 Signup response type invalid, should be text (%d), was %d`, SignupResponseType, msg.Type)
 	}
 	return &SignupResponse{ClientName: string(msg.Data)}, nil
 }
-func (msg *SocketMessage) ParseSignupRequest() (out *SignupRequest, err error) { // TODO: USE!
+func (msg *SocketMessage) ParseSignupRequest() (out *SignupRequest, err error) {
 	if msg == nil {
-		return nil, errors.New("Signup response socket message was nil")
+		return nil, ErrSignupReqNil
 
 	}
 	if msg.Type != SignupRequestType {
@@ -183,7 +191,7 @@ func NewSignupRequest(readerName, secret string) *SocketMessage {
 		panic("failed to create signup request: " + err.Error()) // TODO: ew
 	}
 	return &SocketMessage{
-		Type: SignupRequestType, // TODO; used to be signup, should this be text?
+		Type: SignupRequestType,
 		Data: bs,
 	}
 }
@@ -195,7 +203,7 @@ func NewSignupResponse(clientName RfidReaderName) *SocketMessage {
 }
 func NewRenewalRequest(readerName string) *SocketMessage {
 	return &SocketMessage{
-		Type: websocket.PingMessage, // TODO: is this ok?
+		Type: websocket.PingMessage,
 		Data: []byte(readerName),
 	}
 }
@@ -239,17 +247,16 @@ func TryGetMessage(ctx context.Context, conn *websocket.Conn, timeout ...time.Du
 		msgType, bytes, err := conn.ReadMessage() // Bytes may include first bytes to define type              // TODO: this will generally be binary or text for non-signup-flow items
 		if err != nil {
 			println("failed to read from connection... " + err.Error()) // TODO: del?
+			return                                                      // TODO: ok?
 		}
 		recvd := ReceivedMsg{msgType, bytes, err}
 		println("Received message:" + recvd.String()) // TODO: del!
 		resultChan <- recvd
 	}()
-	//println("waiting for response") // TODO: del
 	select {
 	case res := <-resultChan:
 		return res
 	case <-ctxWithCancel.Done():
-		//println("context cancelled, returning timeout error") // TODO: del
 		return ReceivedMsg{
 			MsgType: MessageTypeError,
 			Bytes:   nil,
@@ -264,7 +271,7 @@ type ReceivedMsg struct {
 	Err     error
 }
 
-func (res ReceivedMsg) AsSignupResponse(expName string) (out *SignupResponse, err error) { // TODO: USE!
+func (res ReceivedMsg) AsSignupResponse(expName string) (out *SignupResponse, err error) {
 	if res.MsgType != SignupResponseType {
 		return nil, fmt.Errorf(`3 Signup response type invalid, should be %d, was %d`, SignupResponseType, res.MsgType)
 	}
@@ -300,13 +307,13 @@ func (res ReceivedMsg) SocketMsg() (out *SocketMessage, err error) {
 		Data: res.Bytes,
 	}, nil
 }
-func (res ReceivedMsg) SocketMsgUnsafe() (out *SocketMessage) { // TODO: USE!
+func (res ReceivedMsg) SocketMsgUnsafe() (out *SocketMessage) {
 	return &SocketMessage{
 		Type: res.MsgType,
 		Data: res.Bytes,
 	}
 }
-func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TODO: USE!
+func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) {
 	if res.Err != nil {
 		return nil, errors.Join(errors.New("error on signup response"), res.Err)
 	}
@@ -315,12 +322,10 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 	}
 	if res.Bytes == nil {
 		err = errors.New("signup request must not have nil bytes")
-		println(err.Error()) // TODO: del
 		return out, err
 	} else {
 		if len(res.Bytes) == 0 {
 			err = errors.New("signup request must not have empty bytes")
-			println(err.Error()) // TODO: del
 			return out, err
 		}
 	}
@@ -331,7 +336,8 @@ func (res ReceivedMsg) AsSignupRequest() (out *SignupRequest, err error) { // TO
 	return out, nil
 }
 
-const RfidByteSize = 8 // TODO: is this correct?? must match RfidByteSize in mdb.go
+const RfidByteSize = 8
+
 //func (res ReceivedMsg) ValidateWriteRequest() (toWrite [RfidByteSize]byte, err error) {
 //	if res.Err != nil {
 //		return [RfidByteSize]byte{}, res.Err
@@ -378,60 +384,20 @@ func (res ReceivedMsg) ProcessWriteResponse(expectedWritten [RfidByteSize]byte) 
 
 func (res ReceivedMsg) ProcessReadResponse() (bytesRead [RfidByteSize]byte, err error) {
 	if res.Err != nil {
-		println("error processing read response: " + res.Err.Error()) // TODO: del
+		println("error processing read response: " + res.Err.Error())
 		return [RfidByteSize]byte{}, errors.New("error on read response: " + res.Err.Error())
 	}
 	if res.Bytes == nil {
-		println("nil result bytes!: ") // TODO: del
+		println("nil result bytes!: ")
 		return [RfidByteSize]byte{}, errors.New("invalid read response size")
 	}
 	if len(res.Bytes) != RfidByteSize {
-		println("bad byte size, result:" + string(res.Bytes)) // TODO: del
+		println("bad byte size, result:" + string(res.Bytes))
 		return [RfidByteSize]byte{}, errors.New("invalid read response size")
 	}
 	if res.MsgType != ReadResponseType {
-		println("bad response type:", res.MsgType, "should be", ReadResponseType) // TODO: del
+		println("bad response type:", res.MsgType, "should be", ReadResponseType)
 		return [RfidByteSize]byte{}, errors.New("invalid read response type")
 	}
-	//resp, err := res.GetRequestData(websocket.BinaryMessage, FirstByteRead)
-	//if len(resp) != RfidByteSize {
-	//	return out, errors.New("bad read response size")
-	//}
-	//return [RfidByteSize]byte(resp), nil
 	return [RfidByteSize]byte(res.Bytes), nil
 }
-
-//func (res ReceivedMsg) GetRequestData(expMsgType int, expFirstByte byte) (resultWithTypeByte []byte, err error) {
-//	resultWithTypeByte = nil
-//	msgType, msgBytes := res.MsgType, res.Bytes
-//	if res.Err != nil {
-//		err = errors.Join(errors.New("error reading response from websocket on client"), res.Err)
-//		println("res.Err != nil", err.Error()) // TODO: del
-//		return
-//	}
-//	resp, err := res.SocketMsg()
-//	if err != nil {
-//		println("got a non-socketMessage: " + err.Error())
-//		return nil, err
-//	}
-//	// validate response is as expected
-//	if msgType == websocket.TextMessage {
-//		err = errors.New(string(resp.Data))
-//		println("errMsg", string(resp.Data))
-//		return
-//	}
-//	if msgType != expMsgType {
-//		err = errors.New("unexpected message format for response")
-//		println("unexpected message format for response", msgType, "expected", expMsgType)
-//		return
-//	}
-//	if resp.Data[0] != expFirstByte {
-//		err = fmt.Errorf(`first byte was expected to be %d, got %d`, int(expFirstByte), resp.Data[0])
-//		println(err.Error()) // TODO: del
-//		return
-//	}
-//	if len(resp.Data) == 1 { // TODO: will it ever be 0?
-//		return nil, nil // TODO: ok?
-//	}
-//	return resp.Data[1:], nil
-//}
